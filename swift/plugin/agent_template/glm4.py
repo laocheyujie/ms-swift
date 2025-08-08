@@ -83,22 +83,19 @@ class GLM4_5AgentTemplate(BaseAgentTemplate):
     @staticmethod
     def _find_function_call(single_content: str) -> Optional['Function']:
         from swift.llm.infer import Function
-        single_content = single_content.replace('<tool_call>', '').strip()
         func_name_match = re.match(r'^([^\n<]+)', single_content)
         if not func_name_match:
             return None
         func_name = func_name_match.group(1).strip()
-        arg_key_pattern = re.compile(r'<arg_key>(.*?)</arg_key>', re.DOTALL)
-        arg_value_pattern = re.compile(r'<arg_value>(.*?)</arg_value>', re.DOTALL)
-        keys = arg_key_pattern.findall(single_content)
-        values = arg_value_pattern.findall(single_content)
+        keys = re.findall(r'<arg_key>(.*?)</arg_key>', single_content, re.DOTALL)
+        values = re.findall(r'<arg_value>(.*?)</arg_value>', single_content, re.DOTALL)
         if len(keys) != len(values):
             return None
         args = {k.strip(): v.strip() for k, v in zip(keys, values)}
         return Function(name=func_name, arguments=json.dumps(args, ensure_ascii=False))
 
     def get_toolcall(self, response: str) -> List['Function']:
-        toolcall_list = response.replace('<|observation|>', '').split('</tool_call>')
+        toolcall_list = re.findall(r'<tool_call>(.*?)</tool_call>', response, re.DOTALL)
         functions = []
         for toolcall in toolcall_list:
             function = self._find_function_call(toolcall)
