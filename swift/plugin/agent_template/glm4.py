@@ -22,7 +22,6 @@ class GLM4AgentTemplate(BaseAgentTemplate):
         matches = pattern.findall(single_content)
         if not matches:
             return
-
         name, arguments = matches[0]
         return Function(name=name, arguments=arguments)
 
@@ -88,7 +87,6 @@ class GLM4_5AgentTemplate(BaseAgentTemplate):
         func_name_match = re.match(r'^([^\n<]+)', single_content)
         if not func_name_match:
             return None
-        
         func_name = func_name_match.group(1).strip()
         arg_key_pattern = re.compile(r'<arg_key>(.*?)</arg_key>', re.DOTALL)
         arg_value_pattern = re.compile(r'<arg_value>(.*?)</arg_value>', re.DOTALL)
@@ -96,7 +94,6 @@ class GLM4_5AgentTemplate(BaseAgentTemplate):
         values = arg_value_pattern.findall(single_content)
         if len(keys) != len(values):
             return None
-        
         args = {k.strip(): v.strip() for k, v in zip(keys, values)}
         return Function(name=func_name, arguments=json.dumps(args, ensure_ascii=False))
 
