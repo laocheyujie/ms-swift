@@ -83,6 +83,7 @@ class GLM4_5AgentTemplate(BaseAgentTemplate):
     @staticmethod
     def _find_function_call(single_content: str) -> Optional['Function']:
         from swift.llm.infer import Function
+        single_content = single_content.strip()
         func_name_match = re.match(r'^([^\n<]+)', single_content)
         if not func_name_match:
             return None
