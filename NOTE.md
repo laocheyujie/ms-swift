@@ -1,17 +1,24 @@
 # 安装
 ## Docker 安装
+### 启动容器
+> [环境准备](https://swift.readthedocs.io/zh-cn/latest/Instruction/Megatron-SWIFT%E8%AE%AD%E7%BB%83.html#id1)
+
+离线的话可以提前下好 Megatron-LM
+```bash
+git clone https://github.com/NVIDIA/Megatron-LM.git Megatron-LM --branch core_r0.13.0
+```
+
 ```bash
 docker pull modelscope-registry.us-west-1.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.4.0-py310-torch2.6.0-vllm0.8.5.post1-modelscope1.28.1-swift3.6.4
-```
-```bash
-docker run --gpus all --shm-size=128g --net=host -itd -v /data/cheyujie/models:/models -v /data/cheyujie/github_fork/ms-swift:/mnt/workspace/ms-swift --name ms modelscope-registry.us-west-1.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.4.0-py310-torch2.6.0-vllm0.8.5.post1-modelscope1.28.1-swift3.6.4 /bin/bash
+
+
+docker run --gpus all --shm-size=128g --net=host -itd -v /data/cheyujie/models:/models -v /data/cheyujie/code/ms-swift:/mnt/workspace/ms-swift -v /data/cheyujie/code/Megatron-LM:/mnt/workspace/Megatron-LM --name ms modelscope-registry.us-west-1.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.4.0-py310-torch2.6.0-vllm0.8.5.post1-modelscope1.28.1-swift3.6.4 /bin/bash
 
 docker exec -it ms /bin/bash
 ```
 
-容器内：
 
-添加代理：
+### 添加代理
 `vi ~/.bashrc`
 ```bash
 BASE_PROXY_URL="http://xxx.xxx.xxx.xxx:7890"
@@ -39,7 +46,7 @@ function proxytest() {
 }
 ```
 
-
+### Python 依赖
 ```bash
 pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 pip config set global.extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple
@@ -48,9 +55,68 @@ pip install --upgrade pip
 cd /mnt/workspace/ms-swift
 pip install -e .
 pip install 'transformers>=4.54' -U
-pip install swanlab -U
+pip install swanlab ipykernel -U
 ```
 
+
+### Multi-node
+```bash
+apt update -y && apt install -y pdsh
+apt install -y openssh-server
+
+# 修改配置
+sed -i 's/^#\?Port .*/Port 2333/' /etc/ssh/sshd_config
+sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+export passwd=cheyujie && printf "${passwd}\n${passwd}\n"  | passwd root 
+
+# 测试配置
+/usr/sbin/sshd -t 
+# 没有输出就是正常
+
+service ssh start
+
+ss -lntp | grep :2333
+
+ssh -p 2333 root@ip地址
+
+rm -rf ~/.ssh/*
+ssh-keygen
+
+tee ~/.ssh/config <<-'EOF'
+Host node-1
+        User  root
+        Hostname 172.16.16.4
+        port 2333
+        IdentityFile ~/.ssh/id_rsa
+Host node-2
+        User  root
+        Hostname 172.16.16.3
+        port 2333
+        IdentityFile ~/.ssh/id_rsa        
+EOF
+
+
+ssh-copy-id node-1
+ssh-copy-id node-2
+
+cd /mnt/workspace
+
+tee hostfile <<-'EOF'
+node-1 slots=8
+node-2 slots=8
+EOF
+```
+
+### 设置 NCCL
+```bash
+ip a
+
+export GLOO_SOCKET_IFNAME=eth0
+# 或 ib0，ensX，enpXsY… 选实际对外通信的那块
+export NCCL_SOCKET_IFNAME=eth0
+```
 
 
 ## 手动安装
@@ -121,8 +187,17 @@ expert MODELSCOPE_CACHE='/xxx/shared'
 
 # Megatron-LM
 # 依赖库Megatron-LM中的训练模块将由swift进行git clone并安装。你也可以通过环境变量`MEGATRON_LM_PATH`指向已经下载好的repo路径（断网环境，[core_r0.13.0分支](https://github.com/NVIDIA/Megatron-LM/tree/core_r0.13.0)）。
+
+git clone https://github.com/NVIDIA/Megatron-LM.git
+cd Megatron-LM
+git config --global --add safe.directory /xxx/Megatron-LM
+git checkout core_r0.13.0
+
 export MEGATRON_LM_PATH='/xxx/Megatron-LM'
 ```
+
+> 默认位置：local_repo_path: /mnt/workspace/.cache/modelscope/hub/_github/Megatron-LM
+
 
 
 # Megatron
@@ -136,35 +211,115 @@ swift export \
     --output_dir /models/ZhipuAI/GLM-4.5-Air-mcore \
     --test_convert_precision true
 ```
-> test_convert_precisio: 测试HF和Megatron格式权重转换的精度误差，若出现内存不足，请将`--test_convert_precision true`删除
-> thread_count: --to_mcore true时的模型切片数。默认为None，根据模型大小自动设置，使得最大分片小于10GB。
-> model_type: glm4_5
+> - test_convert_precisio: 测试HF和Megatron格式权重转换的精度误差，若出现内存不足，请将`--test_convert_precision true`删除
+> - thread_count: --to_mcore true时的模型切片数。默认为None，根据模型大小自动设置，使得最大分片小于10GB。
+> - model_type: glm4_5
 
 
-默认位置：
-local_repo_path: /mnt/workspace/.cache/modelscope/hub/_github/Megatron-LM
-也可自行下载
-```bash
-git clone https://github.com/NVIDIA/Megatron-LM.git
-```
-再指定
-```bash
---local_repo_path xxx
-```
 
 
 ## 训练
-查看宿主机共享内存
-```bash
-df -h /dev/shm
-```
-经验：
-1. full: lr 1e-5, min_lr 1e-6; lora: lr 1e-4, min_lr 1e-5
-2. 如果离线，可以:
-    1. `git clone https://github.com/NVIDIA/Megatron-LM.git`
-    2. `git checkout core_r0.13.0`
-    3. `export MEGATRON_LM_PATH='/xxx/Megatron-LM'`
 
+注意：
+
+1. 设置 MEGATRON_LM_PATH: `export MEGATRON_LM_PATH='/xxx/Megatron-LM'`
+
+2. Multi-node: 添加`export GLOO_SOCKET_IFNAME=eth0`和`export NCCL_SOCKET_IFNAME=eth0`
+
+3. 查看宿主机共享内存`df -h /dev/shm`
+
+
+经验：
+
+1. full: lr 1e-5, min_lr 1e-6; lora: lr 1e-4, min_lr 1e-5
+
+
+## Tools
+### 训练数据格式
+```json
+{"tools": "[{\"type\": \"function\", \"function\": {\"name\": \"realtime_aqi\", \"description\": \"天气预报。获取实时空气质量。当前空气质量，PM2.5，PM10信息\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"城市名，例如：上海\"}}, \"required\": [\"city\"]}}}]", "messages": [{"role": "user", "content": "北京和上海今天的天气情况"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"北京\"}}"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"上海\"}}"}, {"role": "tool_response", "content": "{\"city\": \"北京\", \"aqi\": \"10\", \"unit\": \"celsius\"}"}, {"role": "tool_response", "content": "{\"city\": \"上海\", \"aqi\": \"72\", \"unit\": \"fahrenheit\"}"}, {"role": "assistant", "content": "根据天气预报工具，北京今天的空气质量指数为10，属于良好水平；上海今天的空气质量指数为72，属于轻度污染水平。"}]}
+```
+
+**注意**：
+1. tools 值是一个包含 tool 列表的 json 字符串；messages 值是对话列表
+2. messages 中 role 为 'tool_call' 和 'tool_response/tool' 的 content 部分都需要是 json 字符串
+3. 支持并行调用工具 `{"role": "tool_call", "content": "..."}, {"role": "tool_call", "content": "..."}, {"role": "tool_response", "content": "..."}, {"role": "tool_response", "content": "..."}`
+
+
+```py
+import json
+
+datasets = []
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "realtime_aqi",
+            "description": "天气预报。获取实时空气质量。当前空气质量，PM2.5，PM10信息",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "城市名，例如：上海"}
+                },
+                "required": ["city"],
+            },
+        },
+    }
+]
+
+messages = [
+    {"role": "user", "content": "北京和上海今天的天气情况"},
+    {
+        "role": "tool_call",
+        "content": '{"name": "realtime_aqi", "arguments": {"city": "北京"}}',
+    },
+    {
+        "role": "tool_call",
+        "content": '{"name": "realtime_aqi", "arguments": {"city": "上海"}}',
+    },
+    {
+        "role": "tool_response",
+        "content": '{"city": "北京", "aqi": "10", "unit": "celsius"}',
+    },
+    {
+        "role": "tool_response",
+        "content": '{"city": "上海", "aqi": "72", "unit": "fahrenheit"}',
+    },
+    {
+        "role": "assistant",
+        "content": "根据天气预报工具，北京今天的空气质量指数为10，属于良好水平；上海今天的空气质量指数为72，属于轻度污染水平。",
+    },
+]
+
+data = {
+    "tools": json.dumps(tools, ensure_ascii=False),
+    "messages": messages,
+}
+datasets.append(data)
+
+for d in datasets:
+    with open("tools.jsonl", "a") as f:
+        json.dump(d, f, ensure_ascii=False)
+        f.write("\n")
+```
+
+### 测试
+```py
+from swift.llm import get_model_tokenizer, get_template
+
+_, tokenizer = get_model_tokenizer('ZhipuAI/GLM-4-9B-0414', load_model=False)
+template = get_template(
+    tokenizer.model_meta.template, 
+    tokenizer, 
+    # agent_template='hermes'
+)
+data = {"tools": "[{\"type\": \"function\", \"function\": {\"name\": \"realtime_aqi\", \"description\": \"天气预报。获取实时空气质量。当前空气质量，PM2.5，PM10信息\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"城市名，例如：上海\"}}, \"required\": [\"city\"]}}}]", "messages": [{"role": "user", "content": "北京和上海今天的天气情况"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"北京\"}}"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"上海\"}}"}, {"role": "tool_response", "content": "{\"city\": \"北京\", \"aqi\": \"10\", \"unit\": \"celsius\"}"}, {"role": "tool_response", "content": "{\"city\": \"上海\", \"aqi\": \"72\", \"unit\": \"fahrenheit\"}"}, {"role": "assistant", "content": "根据天气预报工具，北京今天的空气质量指数为10，属于良好水平；上海今天的空气质量指数为72，属于轻度污染水平。"}]}
+template.set_mode('train')
+encoded = template.encode(data)
+print(f'[INPUT_IDS] {template.safe_decode(encoded["input_ids"])}\n')
+print(f'[LABELS] {template.safe_decode(encoded["labels"])}')
+```
 
 
 ## 权重转换 Megatron 转 HF
@@ -172,13 +327,13 @@ df -h /dev/shm
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
 swift export \
-    --mcore_model /models/megatron_output/FengHe-GLM-4.5-Air/vx-xxx \
+    --mcore_model /models/megatron_output/GLM-4.5-Air-SFT/vx-xxx \
     --to_hf true \
     --torch_dtype bfloat16 \
-    --output_dir /models/megatron_output/FengHe-GLM-4.5-Air/vx-xxx-hf \
+    --output_dir /models/megatron_output/GLM-4.5-Air-HF/vx-xxx-hf \
     --test_convert_precision true
 ```
-> test_convert_precisio: 测试HF和Megatron格式权重转换的精度误差，若出现内存不足，请将`--test_convert_precision true`删除
+> - test_convert_precisio: 测试HF和Megatron格式权重转换的精度误差，若出现内存不足，请将`--test_convert_precision true`删除
 
 ## LoRA
 ```bash
@@ -192,33 +347,28 @@ swift export \
     --output_dir megatron_output/Qwen2.5-7B-Instruct/vx-xxx-hf \
     --test_convert_precision true
 ```
-> model_type: glm4_5
+> - model_type: glm4_5
 
-
-swift export \
-    --model /models/ZhipuAI/GLM-4.5-Air \
-    --mcore_model /models/ZhipuAI/GLM-4.5-Air-mcore \
-    --mcore_adapters /models/megatron_output/FengHe-GLM-4.5-Air/v10-20250805-140427 \
-    --to_hf true \
-    --torch_dtype bfloat16 \
-    --output_dir /models/megatron_output/FengHe-GLM-4.5-Air-SFT \
-    --test_convert_precision true
 
 
 ## 推理
 ```bash
 swift infer \
-    --model megatron_output/FengHe-GLM-4.5-Air/vx-xxx-hf \
+    --model megatron_output/GLM-4.5-Air-HF/vx-xxx-hf \
     --stream true \
     --temperature 0 \
     --max_new_tokens 2048
 ```
 
-swift infer \
-    --model /models/megatron_output/FengHe-GLM-4.5-Air-SFT \
-    --stream true \
-    --temperature 0 \
-    --max_new_tokens 2048
+
+
+
+
+
+
+
+
+
 
 
 # 参数
@@ -228,35 +378,3 @@ ExportArguments(model='/models/ZhipuAI/GLM-4.5-Air', model_type='glm4_5', model_
 ## Megatron 转 HF
 args: ExportArguments(model='/models/ZhipuAI/GLM-4.5-Air', model_type='glm4_5', model_revision=None, task_type='causal_lm', torch_dtype=torch.bfloat16, attn_impl=None, new_special_tokens=[], num_labels=None, problem_type=None, rope_scaling=None, device_map=None, max_memory={}, max_model_len=None, local_repo_path=None, init_strategy=None, template='glm4_5', system=None, max_length=2048, truncation_strategy='delete', max_pixels=None, agent_template=None, norm_bbox=None, use_chat_template=False, padding_free=False, padding_side='right', loss_scale='default', sequence_parallel_size=1, response_prefix=None, template_backend='swift', dataset=[], val_dataset=[], split_dataset_ratio=0.0, data_seed=42, dataset_num_proc=1, load_from_cache_file=True, dataset_shuffle=True, val_dataset_shuffle=False, streaming=False, interleave_prob=None, stopping_strategy='first_exhausted', shuffle_buffer_size=1000, download_mode='reuse_dataset_if_exists', columns={}, strict=False, remove_unused_columns=True, model_name=None, model_author=None, custom_dataset_info=[], quant_method=None, quant_bits=None, hqq_axis=None, bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True, bnb_4bit_quant_storage=None, max_new_tokens=None, temperature=None, top_k=None, top_p=None, repetition_penalty=None, num_beams=1, stream=False, stop_words=[], logprobs=False, top_logprobs=None, ckpt_dir='/models/megatron_output/FengHe-GLM-4.5-Air/v7-20250804-230716', lora_modules=[], tuner_backend='peft', train_type='lora', adapters=[], external_plugins=[], seed=42, model_kwargs={}, load_args=True, load_data_args=False, packing=False, lazy_tokenize=False, cached_dataset=[], custom_register_path=[], use_hf=False, hub_token=None, ddp_timeout=18000000, ddp_backend=None, ignore_args_error=False, use_swift_lora=False, merge_lora=False, safe_serialization=True, max_shard_size='5GB', output_dir='/models/megatron_output/FengHe-GLM-4.5-Air-PT', quant_n_samples=256, quant_batch_size=1, group_size=128, to_cached_dataset=False, to_ollama=False, to_mcore=False, to_hf=True, mcore_model='/models/ZhipuAI/GLM-4.5-Air-mcore', mcore_adapters=['/models/megatron_output/FengHe-GLM-4.5-Air/v7-20250804-230716'], thread_count=None, test_convert_precision=True, push_to_hub=False, hub_model_id=None, hub_private_repo=False, commit_message='update files', to_peft_format=False, exist_ok=False)
 
-
--------------------- end of arguments ---------------------
-INFO:megatron.core.num_microbatches_calculator:setting number of microbatches to constant 16
-> setting tensorboard ...
-WARNING: one_logger package is required to enable e2e metrics tracking. please go to https://confluence.nvidia.com/display/MLWFO/Package+Repositories for details to install it
-WARNING:megatron.core.rerun_state_machine:RerunStateMachine initialized in mode disabled
-torch distributed is already initialized, skipping initialization ...
-> initialized tensor model parallel with size 1
-> initialized pipeline model parallel with size 1
-> setting random seeds to 42 ...
-> compiling dataset index builder ...
-make: 进入目录“/mnt/workspace/.cache/modelscope/hub/_github/Megatron-LM/megatron/core/datasets”
-g++ -O3 -Wall -shared -std=c++11 -fPIC -fdiagnostics-color -I/usr/local/include/python3.10 -I/usr/local/lib/python3.10/site-packages/pybind11/include helpers.cpp -o helpers_cpp.cpython-310-x86_64-linux-gnu.so
-In file included from helpers.cpp:12:
-/usr/local/lib/python3.10/site-packages/pybind11/include/pybind11/numpy.h: In function ‘void build_exhaustive_blending_indices(pybind11::array_t<short int>&, pybind11::array_t<long int>&, const pybind11::array_t<long int>&, int32_t)’:
-/usr/local/lib/python3.10/site-packages/pybind11/include/pybind11/numpy.h:633:14: warning: ‘error_argmax’ may be used uninitialized in this function [-Wmaybe-uninitialized]
-  633 |     return i * strides[Dim] + byte_offset_unsafe<Dim + 1>(strides, index...);
-      |            ~~^~~~~~~~~~
-helpers.cpp:49:13: note: ‘error_argmax’ was declared here
-   49 |     int64_t error_argmax;
-      |             ^~~~~~~~~~~~
-make: 离开目录“/mnt/workspace/.cache/modelscope/hub/_github/Megatron-LM/megatron/core/datasets”
->>> done with dataset index builder. Compilation time: 7.948 seconds
-WARNING: constraints for invoking optimized fused softmax kernel are not met. We default back to unfused kernel invocations.
-> compiling and loading fused kernels ...
-[rank0]:[W804 19:19:43.148778003 ProcessGroupNCCL.cpp:4561] [PG ID 0 PG GUID 0 Rank 0]  using GPU 0 to perform barrier as devices used by this process are currently unknown. This can potentially cause a hang if this rank to GPU mapping is incorrect. Specify device_ids in barrier() to force use of a particular device, or call init_process_group() with a device_id.
->>> done with compiling and loading fused kernels. Compilation time: 0.404 seconds
-building GPT model ...
-/mnt/workspace/.cache/modelscope/hub/_github/Megatron-LM/megatron/core/transformer/transformer_config.py:837: UserWarning: If you are using transformer_engine as the transformer implementation, the core_attn is from transformer_engine and may be the fused version. For fused attention, you have no need to set 'core_attn' to recompute. Please check that the core_attn recompute is really needed.
-  warnings.warn(
-/usr/local/lib/python3.10/site-packages/transformer_engine/pytorch/cpu_offload.py:670: DeprecationWarning: Offloading weights is deprecated. Using offload_weights=True does not have any effect.
-  warnings.warn(
