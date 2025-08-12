@@ -160,6 +160,8 @@ pip install liger_kernel nvitop pre-commit math_verify py-spy -U
 
 
 ### Megatron 依赖
+[环境准备](https://swift.readthedocs.io/zh-cn/latest/Instruction/Megatron-SWIFT%E8%AE%AD%E7%BB%83.html#id1)
+
 ```bash
 # 推荐torch版本：2.6
 pip install pybind11
@@ -219,6 +221,11 @@ swift export \
 
 
 ## 训练
+### 训练流程
+
+[Best Practices for SFT Training](https://github.com/modelscope/ms-swift/pull/5033)
+
+[Best Practices for GRPO Training](https://github.com/modelscope/ms-swift/issues/4030)
 
 注意：
 
@@ -321,6 +328,22 @@ print(f'[INPUT_IDS] {template.safe_decode(encoded["input_ids"])}\n')
 print(f'[LABELS] {template.safe_decode(encoded["labels"])}')
 ```
 
+### loss_scale
+[loss_scale](https://swift.readthedocs.io/zh-cn/latest/Instruction/Agent%E6%94%AF%E6%8C%81.html#loss-scale)
+
+#### ReACT
+```json
+{
+    "Action:": [2.0, 2.0],
+    "Action Input:": [2.0, 2.0],
+    "Thought:": [1.0, 1.0],
+    "Final Answer:": [1.0, 1.0],
+    "Observation:": [2.0, 0.0]
+}
+```
+每个列表的第一个值表示“字段本身”的权重，第二个值表示该字段“结果”的权重
+
+
 
 ## 权重转换 Megatron 转 HF
 ### Full
@@ -337,6 +360,15 @@ swift export \
 
 ## LoRA
 ```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+swift export \
+    --mcore_adapters megatron_output/Qwen3-235B-A22B-Instruct-2507/vx-xxx \
+    --to_hf true \
+    --torch_dtype bfloat16 \
+    --output_dir megatron_output/Qwen3-235B-A22B-Instruct-2507/vx-xxx-hf
+```
+
+```bash
 CUDA_VISIBLE_DEVICES=0 \
 swift export \
     --model /models/ZhipuAI/GLM-4.5-Air \
@@ -352,16 +384,30 @@ swift export \
 
 
 ## 推理
+
 ```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 swift infer \
     --model megatron_output/GLM-4.5-Air-HF/vx-xxx-hf \
+    --infer_backend vllm \
     --stream true \
     --temperature 0 \
+    --vllm_tensor_parallel_size 8 \
+    --vllm_max_model_len 8192 \
     --max_new_tokens 2048
 ```
 
-
-
+非推理模式：
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+swift infer \
+    --model Qwen/Qwen3-8B \
+    --infer_backend vllm \
+    --stream true \
+    --max_new_tokens 2048 \
+    --max_model_len 8192 \
+    --response_prefix '<think>\n\n</think>\n\n'
+```
 
 
 

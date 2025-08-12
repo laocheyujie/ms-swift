@@ -47,4 +47,5 @@ megatron sft \
     --dataset_num_proc 8 \
     --no_save_optim true \
     --no_save_rng true \
+    --loss_scale default \
     --attention_backend flash
