@@ -9,7 +9,7 @@ import transformers
 from packaging import version
 from transformers import TrainingArguments
 
-from swift.llm import TrainArguments, deep_getattr, get_model_arch
+from swift.llm import TrainArguments, deep_getattr
 from swift.plugin import Tuner, extra_tuners
 from swift.tuners import Swift
 from swift.utils import activate_parameters, find_all_linears, find_embedding, find_norm, freeze_parameters, get_logger
@@ -56,7 +56,7 @@ def get_multimodal_target_regex(
     freeze_aligner: bool = True,
     include_embedding: bool = False,
 ) -> str:
-    model_arch = get_model_arch(model.model_meta.model_arch)
+    model_arch = model.model_meta.model_arch
     modules = []
     if not freeze_llm:
         modules += model_arch.language_model
@@ -173,6 +173,8 @@ def prepare_adapter(args: TrainArguments, model, *, template=None, train_dataset
                 task_type = 'SEQ_CLS'
             elif task_type == 'GENERATIVE_RERANKER':
                 task_type = 'CAUSAL_LM'
+            if args.target_parameters is not None:
+                lora_kwargs['target_parameters'] = args.target_parameters
             lora_config = LoraConfig(task_type=task_type, lora_dtype=args.lora_dtype, **lora_kwargs)
             if args.init_weights == 'lora-ga':
                 try:
@@ -247,7 +249,7 @@ def prepare_adapter(args: TrainArguments, model, *, template=None, train_dataset
         model = Swift.prepare_model(model, llamapro_config)
         logger.info(f'llamapro_config: {llamapro_config}')
     elif args.train_type == 'adapter':
-        model_arch = get_model_arch(model.model_meta.model_arch)
+        model_arch = model.model_meta.model_arch
         mlp_key = model_arch.mlp
         mlp_key = mlp_key.split('.{}.')[1]
         adapter_config = AdapterConfig(
@@ -329,13 +331,13 @@ class TunerMixin:
                 # Unsloth prepares and loads lora outside this function when
                 # resume_from_checkpoint, so do not disable grad here
                 model.requires_grad_(False)
-            if args.resume_from_checkpoint:
+            if args.resume_from_checkpoint or args.adapters:
                 if args.train_type in extra_tuners:
                     tuner: Tuner = extra_tuners[args.train_type]
                 else:
                     tuner = Swift
-                kwargs = {}
-                model = tuner.from_pretrained(model, args.resume_from_checkpoint, is_trainable=True, **kwargs)
+                assert not args.adapters or len(args.adapters) == 1, f'args.adapters: {args.adapters}'
+                model = tuner.from_pretrained(model, args.resume_from_checkpoint or args.adapters[0], is_trainable=True)
             else:
                 if args.train_type in extra_tuners:
                     tuner: Tuner = extra_tuners[args.train_type]

@@ -58,7 +58,7 @@ class InternvlTemplate(Template):
 
     def forward_context(self, model, inputs):
         model_name = model.language_model.__class__.__name__.lower()
-        if self._packing and 'internlm2' in model_name:
+        if self.padding_free and 'internlm2' in model_name:
             position_ids = inputs['position_ids']
             modeling_module = model.language_model.model.layers[0].attention.__class__
             return self._patch_flash_attention_forward(modeling_module, position_ids, use_new_func=True)
@@ -146,8 +146,8 @@ class Internvl2Template(InternvlTemplate):
                 '<IMG_CONTEXT>', add_special_tokens=False) * self.num_image_token * num_patches[i]
             return img_tokens
 
-        encoded['input_ids'], encoded['labels'] = self._extend_tokens(input_ids, labels, idx_list, _get_new_tokens)
-        encoded['loss_scale'] = self._extend_loss_scale(loss_scale, idx_list, _get_new_tokens)
+        encoded['input_ids'], encoded['labels'], encoded['loss_scale'] = self._extend_tokens(
+            input_ids, labels, loss_scale, idx_list, _get_new_tokens)
         encoded['pixel_values'] = pixel_values
         return encoded
 

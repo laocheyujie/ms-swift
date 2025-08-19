@@ -22,8 +22,8 @@ from transformers.utils.versions import require_version
 
 from swift.utils import get_dist_setting, get_logger, is_mp, is_unsloth_available, patch_getattr
 from .constant import ModelType
-from .patcher import (patch_automodel, patch_automodel_for_sequence_classification, patch_get_dynamic_module,
-                      patch_mp_ddp, patch_tp_plan)
+from .patcher import (get_lm_head_model, patch_automodel, patch_automodel_for_sequence_classification,
+                      patch_get_dynamic_module, patch_mp_ddp, patch_tp_plan)
 from .utils import AttnImpl, HfConfigFactory, InitModelStrategy, ModelInfo, safe_snapshot_download
 
 GetModelTokenizerFunction = Callable[..., Tuple[Optional[PreTrainedModel], PreTrainedTokenizerBase]]
@@ -117,6 +117,7 @@ def register_model(model_meta: ModelMeta, *, exist_ok: bool = False) -> None:
     model_type: The unique ID for the model type. Models with the same model_type share
         the same architectures, template, get_function, etc.
     """
+    from .model_arch import get_model_arch
     model_type = model_meta.model_type
     if not exist_ok and model_type in MODEL_MAPPING:
         raise ValueError(f'The `{model_type}` has already been registered in the MODEL_MAPPING.')
@@ -125,6 +126,8 @@ def register_model(model_meta: ModelMeta, *, exist_ok: bool = False) -> None:
         model_meta.is_multimodal = True
     if model_type in RMModelType.__dict__:
         model_meta.is_reward = True
+    if model_meta.model_arch:
+        model_meta.model_arch = get_model_arch(model_meta.model_arch)
     MODEL_MAPPING[model_type] = model_meta
 
 
@@ -662,11 +665,15 @@ def get_model_tokenizer(
         num_new_tokens = tokenizer.add_special_tokens({'additional_special_tokens': new_special_tokens})
         if num_new_tokens > 0:
             logger.info(f'Added {num_new_tokens} new special tokens.')
-            if model is not None and model.config.vocab_size < len(tokenizer):
-                vocab_size = math.ceil(len(tokenizer) / 128) * 128
-                model.resize_token_embeddings(vocab_size)
-                # fix transformers==4.52.4 qwen2.5-vl
-                model.config.vocab_size = vocab_size
+
+            if model is not None:
+                llm_model = get_lm_head_model(model, model_meta)
+                origin_vocab_size = HfConfigFactory.get_config_attr(llm_model.config, 'vocab_size')
+                if origin_vocab_size < len(tokenizer):
+                    vocab_size = math.ceil(len(tokenizer) / 128) * 128
+                    llm_model.resize_token_embeddings(vocab_size)
+                    # fix transformers==4.52.4 qwen2.5-vl
+                    HfConfigFactory.set_config_attr(llm_model.config, 'vocab_size', vocab_size)
 
     problem_type = kwargs.get('problem_type')
     if problem_type is None and model_info.num_labels == 1:

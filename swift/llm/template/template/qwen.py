@@ -2,12 +2,13 @@
 import os
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional
 
 import torch
 import torch.nn.functional as F
 import transformers
 from packaging import version
+from torch import nn
 
 from swift.llm import get_packed_seq_params, to_device, to_float_dtype
 from swift.utils import get_env_args, is_deepspeed_enabled
@@ -17,7 +18,7 @@ from ..register import register_template
 from ..template_inputs import StdTemplateInputs
 from ..template_meta import TemplateMeta
 from ..utils import Context, Word, findall
-from ..vision_utils import load_audio, load_batch, load_video_ovis2
+from ..vision_utils import load_audio, load_batch, load_video_ovis2, load_video_ovis2_5
 from .llama import Llama3TemplateMeta
 from .utils import DEFAULT_SYSTEM, ChatmlTemplateMeta, ThinkingTemplate
 
@@ -160,7 +161,7 @@ class QwenAudioTemplate(Template):
         assert isinstance(audio, str)
         return [f'Audio {index + 1}:<audio>{audio}</audio>\n']
 
-    def _tokenize(self, context, **tokenizer_kwargs):
+    def _tokenize(self, context, **kwargs):
         audio_info = self.processor.process_audio(context)
         return super()._tokenize(context, audio_info=audio_info)
 
@@ -241,10 +242,10 @@ class Qwen2VLTemplate(Template):
             video = inputs.videos[index]
             if os.path.isdir(video):
                 video = [os.path.join(video, fname) for fname in os.listdir(video)]
-            video = fetch_video({'video': video})
+            video, video_kwargs = fetch_video({'video': video}, return_video_sample_fps=True)
             if isinstance(video, torch.Tensor):
                 video = video.to(torch.uint8)
-            inputs.videos[index] = video
+            inputs.videos[index] = (video, video_kwargs)
             return ['<|vision_start|><|video_pad|><|vision_end|>']
 
     def replace_ref(self, ref: str, index: int, inputs: StdTemplateInputs) -> List[Context]:
@@ -260,27 +261,28 @@ class Qwen2VLTemplate(Template):
         labels = encoded['labels']
         loss_scale = encoded.get('loss_scale', None)
         images = inputs.images
-        videos = inputs.videos
+        videos = [video[0] for video in inputs.videos]
+        fps = [video[1] for video in inputs.videos]
         for media_type in ['images', 'videos']:
             if locals()[media_type]:
                 if media_type == 'images':
                     media_token = self.image_token_id
-                    media_inputs = processor.image_processor(
-                        images=images, videos=None, return_tensors='pt', do_resize=False)
+                    media_inputs = processor.image_processor(images=images, return_tensors='pt', do_resize=False)
                     media_grid_thw = media_inputs['image_grid_thw']
                 else:
+                    kwargs = {}
                     if hasattr(processor, 'video_processor'):
                         processor_func = processor.video_processor
                     else:
                         processor_func = processor.image_processor
-                    media_inputs = processor_func(images=None, videos=videos, return_tensors='pt', do_resize=False)
+                        kwargs['images'] = None
+                    media_inputs = processor_func(videos=videos, return_tensors='pt', do_resize=False, **kwargs)
                     media_grid_thw = media_inputs['video_grid_thw']
                     media_token = self.video_token_id
                     if self.version == 'v2_5':
-                        from qwen_vl_utils import vision_process
                         media_inputs['second_per_grid_ts'] = [
-                            processor.image_processor.temporal_patch_size / vision_process.FPS
-                        ] * len(media_grid_thw)
+                            processor.image_processor.temporal_patch_size / tmp for tmp in fps
+                        ]
                 idx_list = findall(input_ids, media_token)
                 merge_length = processor.image_processor.merge_size**2
 
@@ -288,8 +290,8 @@ class Qwen2VLTemplate(Template):
                     token_len = (media_grid_thw[i].prod() // merge_length)
                     return [media_token] * token_len
 
-                input_ids, labels = self._extend_tokens(input_ids, labels, idx_list, _get_new_tokens)
-                loss_scale = self._extend_loss_scale(loss_scale, idx_list, _get_new_tokens)
+                input_ids, labels, loss_scale = self._extend_tokens(input_ids, labels, loss_scale, idx_list,
+                                                                    _get_new_tokens)
                 encoded.update(media_inputs)
 
         encoded['input_ids'] = input_ids
@@ -334,7 +336,7 @@ class Qwen2VLTemplate(Template):
             if is_deepspeed_enabled():
                 from PIL import Image
                 images = [Image.new('RGB', (32, 32), (0, 0, 0))]
-                media_inputs = self.processor.image_processor(images=images, videos=None, return_tensors='pt')
+                media_inputs = self.processor.image_processor(images=images, return_tensors='pt')
                 device = input_ids.device
                 media_inputs = to_device(media_inputs, device)
                 pixel_values = media_inputs['pixel_values'].type(dtype)
@@ -381,10 +383,6 @@ class Qwen2VLTemplate(Template):
         second_per_grid_ts = self.gather_list(batch, 'second_per_grid_ts')
         if second_per_grid_ts:
             res['second_per_grid_ts'] = second_per_grid_ts
-        for media_type in ['image', 'video']:
-            grid_thw = self.concat_tensor(batch, f'{media_type}_grid_thw', 0)
-            if grid_thw is not None:
-                res[f'{media_type}_grid_thw'] = grid_thw
         return res
 
     def packing_row(self, row: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -417,7 +415,7 @@ class Qwen2VLTemplate(Template):
 
     def _data_collator(self, batch: List[Dict[str, Any]], *, padding_to: Optional[int] = None) -> Dict[str, Any]:
         res = super()._data_collator(batch, padding_to=padding_to)
-        if self._packing:
+        if self.padding_free:
             res['real_position_ids'] = self.concat_tensor(batch, 'real_position_ids', -1)
         elif self.is_training:
             res['position_ids'] = self._get_position_ids(res)
@@ -529,8 +527,8 @@ class Qwen2_5OmniTemplate(Qwen2_5VLTemplate):
             def _get_new_audio_tokens(i):
                 return audio_token_id * audio_lengths[i]
 
-            input_ids, labels = self._extend_tokens(input_ids, labels, idx_list, _get_new_audio_tokens)
-            loss_scale = self._extend_loss_scale(loss_scale, idx_list, _get_new_audio_tokens)
+            input_ids, labels, loss_scale = self._extend_tokens(input_ids, labels, loss_scale, idx_list,
+                                                                _get_new_audio_tokens)
 
         for media_type in ['image', 'video']:
             token = f'<|{media_type.upper()}|>'
@@ -567,9 +565,8 @@ class Qwen2_5OmniTemplate(Qwen2_5VLTemplate):
                                 res += audio_token_id * audio_seq_length
                         return res
 
-                    input_ids, labels = self._extend_tokens(input_ids, labels, idx_list,
-                                                            _get_new_tokens_use_audio_in_video)
-                    loss_scale = self._extend_loss_scale(loss_scale, idx_list, _get_new_tokens_use_audio_in_video)
+                    input_ids, labels, loss_scale = self._extend_tokens(input_ids, labels, loss_scale, idx_list,
+                                                                        _get_new_tokens_use_audio_in_video)
 
                 else:
 
@@ -577,8 +574,8 @@ class Qwen2_5OmniTemplate(Qwen2_5VLTemplate):
                         token_len = (media_grid_thw[i].prod() // (merge_size**2))
                         return token_id * token_len
 
-                    input_ids, labels = self._extend_tokens(input_ids, labels, idx_list, _get_new_tokens)
-                    loss_scale = self._extend_loss_scale(loss_scale, idx_list, _get_new_tokens)
+                    input_ids, labels, loss_scale = self._extend_tokens(input_ids, labels, loss_scale, idx_list,
+                                                                        _get_new_tokens)
 
         encoded['input_ids'] = input_ids
         encoded['labels'] = labels
@@ -732,6 +729,86 @@ class Ovis2Template(Ovis1_6Template):
 register_template(QwenTemplateMeta(
     MLLMTemplateType.ovis2,
     template_cls=Ovis2Template,
+))
+
+
+class Ovis2_5Template(ThinkingTemplate):
+    num_frames = 8
+    use_model = True
+    skip_prompt = False
+
+    def replace_tag(self, media_type: Literal['image', 'video', 'audio'], index: int,
+                    inputs: StdTemplateInputs) -> List[Context]:
+        if media_type == 'image':
+            return [[-200], '\n']
+        elif media_type == 'video':
+            num_frames = get_env_args('num_frames', int, self.num_frames)
+            inputs.images = load_video_ovis2_5(inputs.videos[index], num_frames)
+            return [[-200], '\n']
+
+    def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
+        min_pixels = get_env_args('min_pixels', int, 448 * 448)
+        max_pixels = get_env_args('max_pixels', int, 1344 * 1792)
+        video_max_pixels = get_env_args('video_max_pixels', int, 896 * 896)
+        encoded = super()._encode(inputs)
+        images = inputs.images
+        input_ids = encoded['input_ids']
+        visual_tokenizer = self.model.visual_tokenizer
+        idx_list = findall(input_ids, [-200])
+        if inputs.videos:
+            assert len(inputs.videos) == 1, 'only support single video'
+            encoded['pixel_values'], encoded['grid_thws'] = visual_tokenizer.preprocess(
+                video=inputs.images, min_pixels=min_pixels, max_pixels=video_max_pixels)
+            num_video_tokens = encoded['grid_thws'].prod(dim=-1)
+            num_video_tokens //= visual_tokenizer.vit.config.hidden_stride**2
+            num_video_tokens //= visual_tokenizer.vit.config.temporal_patch_size
+
+            def _get_new_tokens(i):
+                token_len = num_video_tokens[i].item()
+                return [-303] + [-300] * token_len + [-304]
+
+            input_ids, encoded['labels'], encoded['loss_scale'] = self._extend_tokens(
+                input_ids, encoded['labels'], encoded['loss_scale'], idx_list, _get_new_tokens)
+        elif images:
+            pixel_values, grid_thws = zip(
+                *(visual_tokenizer.preprocess(image=image, min_pixels=min_pixels, max_pixels=max_pixels)
+                  for image in images))
+            encoded['pixel_values'] = torch.cat(pixel_values, dim=0)
+            encoded['grid_thws'] = torch.cat(grid_thws, dim=0)
+
+            num_image_atoms = encoded['grid_thws'].prod(dim=-1)
+            num_image_atoms //= visual_tokenizer.vit.config.hidden_stride**2
+            num_image_atoms //= visual_tokenizer.vit.config.temporal_patch_size
+
+            def _get_new_tokens(i):
+                token_len = num_image_atoms[i].item()
+                return [-301] + [-300] * token_len + [-302]
+
+            input_ids, encoded['labels'], encoded['loss_scale'] = self._extend_tokens(
+                input_ids, encoded['labels'], encoded['loss_scale'], idx_list, _get_new_tokens)
+
+        encoded['input_ids'] = input_ids
+        return encoded
+
+    def _post_encode(self, model: nn.Module, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        inputs_embeds = model.merge_multimodal(
+            input_ids=inputs['input_ids'],
+            pixel_values=inputs.pop('pixel_values', None),
+            grid_thws=inputs.pop('grid_thws', None))
+        return {'inputs_embeds': inputs_embeds}
+
+    def _data_collator_mm_data(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+        res = super()._data_collator_mm_data(batch)
+        grid_thws = self.concat_tensor(batch, 'grid_thws', 0)
+        if grid_thws is not None:
+            res['grid_thws'] = grid_thws
+        return res
+
+
+register_template(QwenTemplateMeta(
+    MLLMTemplateType.ovis2_5,
+    template_cls=Ovis2_5Template,
+    default_system=None,
 ))
 
 

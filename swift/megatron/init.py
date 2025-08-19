@@ -8,7 +8,6 @@ from copy import copy
 from datetime import datetime
 from typing import List, Optional, Tuple
 
-import numpy as np
 import peft
 import torch
 import torch.nn as nn
@@ -17,8 +16,8 @@ from packaging import version
 from tqdm import tqdm
 
 from swift.llm import git_clone_github
-from swift.utils import (JsonlWriter, format_time, get_logger, is_flash_attn_3_available, is_master,
-                         is_megatron_available, safe_ddp_context, split_list, subprocess_run)
+from swift.utils import (JsonlWriter, format_time, get_logger, is_flash_attn_3_available, is_megatron_available,
+                         safe_ddp_context, split_list, subprocess_run)
 
 logger = get_logger()
 
@@ -75,10 +74,10 @@ def _patch_training_log():
         """Log training information such as losses, timing, ...."""
         nonlocal jsonl_writer
         args = get_args()
-        if is_master() and jsonl_writer is None:
+        if jsonl_writer is None:
             logging_path = os.path.join(args.save, 'logging.jsonl')
             logger.info(f'logging_path: {logging_path}')
-            jsonl_writer = JsonlWriter(logging_path, enable_async=True)
+            jsonl_writer = JsonlWriter(logging_path, enable_async=True, write_on_rank='last')
         timers = get_timers()
         writer = get_tensorboard_writer()
         wandb_writer = get_wandb_writer()
@@ -300,7 +299,7 @@ def _patch_training_log():
                 report_memory_flag = False
             timers.log(timers_to_log, normalizer=args.log_interval)
 
-            if is_master():
+            if is_last_rank():
                 logs = {}
                 for key in origin_total_loss_dict:
                     if key not in [advanced_iters_key, skipped_iters_key, nan_iters_key]:
@@ -440,7 +439,6 @@ def _patch_mla_attention():
         output, bias = self.linear_proj(core_attn_out)
 
         return output, bias
-        pass
 
     MultiLatentAttention.forward = forward
 
@@ -556,12 +554,7 @@ def _patch_mla_attention():
                 sequence_start = inference_context.sequence_len_offset
                 sequence_end = sequence_start + q_len
                 rotary_pos_emb = rotary_pos_emb[sequence_start:sequence_end]
-            else:
-                # Shorten rotary_pos_emb to the sequence length when inference_params
-                # is not provided. This makes sure we can run forward directly with
-                # any sequence length. During training, the sequence length is always
-                # the full rotary_pos_emb length.
-                rotary_pos_emb = rotary_pos_emb[0:q_len]
+            # Remove the else branch to fix cp.
 
             # [num_tokens, qk_pos_emb_head_dim] -> [num_tokens, 1, qk_pos_emb_head_dim]
             k_pos_emb = torch.unsqueeze(k_pos_emb, -2)
@@ -666,9 +659,9 @@ def _patch_peft_ModulesToSaveWrapper():
     from megatron.core.dist_checkpointing.mapping import ShardedStateDict
     from .utils import tuners_sharded_state_dict
 
-    ModulesToSaveWrapper = peft_module.ModulesToSaveWrapper
+    OriginModulesToSaveWrapper = peft_module.ModulesToSaveWrapper
 
-    class NewModulesToSaveWrapper(ModulesToSaveWrapper):
+    class ModulesToSaveWrapper(OriginModulesToSaveWrapper):
 
         def __init__(self, module_to_save, *args, **kwargs):
             tp_group = getattr(module_to_save, 'tp_group', None)
@@ -701,7 +694,7 @@ def _patch_peft_ModulesToSaveWrapper():
                         f'{prefix}modules_to_save.default.weight']
             return sharded_state_dict
 
-    peft_module.ModulesToSaveWrapper = NewModulesToSaveWrapper
+    peft_module.ModulesToSaveWrapper = ModulesToSaveWrapper
 
 
 def _patch_TransformerLayer():
@@ -797,9 +790,20 @@ def _patch_torch_FileSystemReader():
     FileSystemReader.read_data = read_data
 
 
+def _patch_TELinear():
+    from megatron.core.extensions.transformer_engine import TELinear
+
+    def __repr__(self):
+        return (f'{type(self).__name__}(in_features={self.in_features}, '
+                f'out_features={self.out_features}, bias={self.use_bias}, TP={self.tp_size})')
+
+    TELinear.__repr__ = __repr__
+
+
 def _patch_megatron():
     _patch_flash_attn()
     _patch_transformer_engine()
+    _patch_TELinear()
     _patch__batched_p2p_ops()
     _patch_mla_attention()
     _patch_TEGroupedLinear()
@@ -818,6 +822,9 @@ def _patch_megatron():
         logger.info('Patch peft successfully applied.')
     except Exception:
         pass
+
+    import megatron.core
+    logger.info(f'megatron.core.__version__: {megatron.core.__version__}')
 
 
 def init_megatron_env() -> None:

@@ -116,7 +116,9 @@ class MLLMTemplateType:
     ovis1_6 = 'ovis1_6'
     ovis1_6_llama3 = 'ovis1_6_llama3'
     ovis2 = 'ovis2'
+    ovis2_5 = 'ovis2_5'
     mimo_vl = 'mimo_vl'
+    midashenglm = 'midashenglm'
 
     llama3_1_omni = 'llama3_1_omni'
     llama3_2_vision = 'llama3_2_vision'
@@ -159,6 +161,7 @@ class MLLMTemplateType:
     glm4v = 'glm4v'
     glm4_1v = 'glm4_1v'
     glm_edge_v = 'glm_edge_v'
+    glm4_5v = 'glm4_5v'
 
     minicpmv = 'minicpmv'
     minicpmv2_5 = 'minicpmv2_5'
@@ -184,6 +187,7 @@ class MLLMTemplateType:
     step_audio = 'step_audio'
     kimi_vl = 'kimi_vl'
     keye_vl = 'keye_vl'
+    dots_ocr = 'dots_ocr'
 
     idefics3 = 'idefics3'
     pixtral = 'pixtral'
