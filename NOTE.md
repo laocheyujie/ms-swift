@@ -109,6 +109,35 @@ node-2 slots=8
 EOF
 ```
 
+### 检查网络
+```bash
+ibv_devinfo
+```
+```
+hca_id:	mlx5_0
+	transport:      InfiniBand (0)
+	...
+	link_layer:		Ethernet
+```
+
+Link layer:
+- InfiniBand
+- Ethernet: 用 Ethernet 以太网互连，表示该网卡当前被配置为以太网模式，而不是 InfiniBand 模式
+
+Mellanox 的网卡（如 ConnectX-5、ConnectX-6 等）支持多种协议，包括：
+- InfiniBand (IB)：一种高速网络协议，通常用于高性能计算（HPC）和数据中心。
+- Ethernet：标准的以太网协议，广泛用于通用网络环境。RoCE（RDMA over Converged Ethernet），虽然可以显著降低延迟，但仍高于 IB。
+
+如果某些机器是 "No IB devices found"，另一些机器又是 IB/RoCE，那就只能在使用 NCCL 时，禁用 IB/RoCE，否则无法正常跨机通信。
+对应的NCCL环境变量为：
+```bash
+# 关闭IB
+export NCCL_IB_DISABLE=1
+# 关闭IBEXT(RoCE) 参考：https://github.com/NVIDIA/nccl/issues/676
+# 注意必须要这个 不然关闭不彻底
+export NCCL_IBEXT_DISABLE=1
+```
+
 ### 设置 NCCL
 ```bash
 ip a
@@ -346,6 +375,9 @@ print(f'[LABELS] {template.safe_decode(encoded["labels"])}')
 
 
 ## 权重转换 Megatron 转 HF
+
+先把分散在不同机器上的权重移到一起
+
 ### Full
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
@@ -370,17 +402,17 @@ swift export \
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
+MEGATRON_LM_PATH='/mnt/workspace/Megatron-LM' \
 swift export \
     --model /models/ZhipuAI/GLM-4.5-Air \
     --mcore_model /models/ZhipuAI/GLM-4.5-Air-mcore \
-    --mcore_adapters megatron_output/Qwen2.5-7B-Instruct/vx-xxx \
+    --mcore_adapters /models/megatron_output/GLM-4.5-Air-FH/vx-xxx \
     --to_hf true \
     --torch_dtype bfloat16 \
-    --output_dir megatron_output/Qwen2.5-7B-Instruct/vx-xxx-hf \
+    --output_dir /models/megatron_output/GLM-4.5-Air-HF/vx \
     --test_convert_precision true
 ```
 > - model_type: glm4_5
-
 
 
 ## 推理
@@ -410,17 +442,148 @@ swift infer \
 ```
 
 
+## 部署
+### NCCL 配置
+```bash
+which nvcc
+nvcc --version
+# 如果有信息，则不用进行后续安装
+
+# 如果没有信息，需要安装 CUDA Toolkit
+conda install -y -c nvidia cuda-toolkit=12.4
+
+# 环境变量设置（当前 shell 生效）
+export CUDA_HOME="$CONDA_PREFIX"
+export CUDA_PATH="$CUDA_HOME"
+export CUDACXX="$CUDA_HOME/bin/nvcc"
+export PATH="$CUDA_HOME/bin:$PATH"
+
+# 选择正确的 targets 目录（x86_64 / sbsa / aarch64 三选一自动判定）
+if [ -d "$CUDA_HOME/targets/x86_64-linux/include" ]; then
+  TARGET_DIR="$CUDA_HOME/targets/x86_64-linux"
+elif [ -d "$CUDA_HOME/targets/sbsa-linux/include" ]; then
+  TARGET_DIR="$CUDA_HOME/targets/sbsa-linux"
+elif [ -d "$CUDA_HOME/targets/aarch64-linux/include" ]; then
+  TARGET_DIR="$CUDA_HOME/targets/aarch64-linux"
+else
+  echo "ERROR: 未找到 CUDA targets 目录，请手动 ls $CUDA_HOME/targets"; exit 1
+fi
+
+# 让编译器能找到 CUDA 头文件/库
+export CPATH="$TARGET_DIR/include:$CPATH"
+export LIBRARY_PATH="$TARGET_DIR/lib:$LIBRARY_PATH"
+export LD_LIBRARY_PATH="$TARGET_DIR/lib:$LD_LIBRARY_PATH"
+
+# 一些构建系统会用到 $CONDA_PREFIX/include，这里做一个 include 软链映射（无 sudo 也可）
+mkdir -p "$CUDA_HOME/include"
+if [ ! -e "$CUDA_HOME/include/cuda_runtime.h" ]; then
+  ln -snf "$TARGET_DIR/include" "$CUDA_HOME/include"
+fi
+
+# （可选）若有 sudo，很多三方会硬编码 /usr/local/cuda，做个软链最省心
+# 没有 sudo 就跳过这步，问题也不大
+if command -v sudo >/dev/null 2>&1; then
+  sudo ln -snf "$CUDA_HOME" /usr/local/cuda
+fi
+
+# 验证
+which nvcc
+nvcc --version
+```
 
 
+### vLLM
+#### 多机部署
+多机部署需要在每台机器上设定 VLLM_HOST_IP，填入每个节点自己的 IP
+```bash
+export VLLM_HOST_IP=x.x.x.x
+```
+
+检测网络
+```bash
+NCCL_DEBUG=TRACE torchrun --nnodes 2 --nproc-per-node=8 --rdzv_backend=c10d --rdzv_endpoint=head_node_ip:8887 scripts/utils/check_nccl.py
+```
+> 每个节点都运行该命令
+> [vLLM 多节点网络检测](https://docs.vllm.ai/en/latest/usage/troubleshooting.html#incorrect-hardwaredriver)
+
+启动模型
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve /models/megatron_output/GLM-4.5-Air-HF/vx \
+    --served-model-name GLM-4.5-Air \
+    --tensor-parallel-size 4 \
+    --max-model-len 32768 \
+    --enforce-eager \
+    --gpu_memory_utilization=0.9 \
+    --enable-chunked-prefill \
+    --enable-auto-tool-choice \
+    --tool-call-parser glm4_moe \
+    --reasoning-parser glm4_moe \
+    --port 6060
+```
 
 
+### SGLang
+#### 单机部署
+```bash
+python3 -m sglang.launch_server \
+  --model /models/megatron_output/GLM-4.5-Air-HF/vx \
+  --served-model-name GLM-4.5-Air \
+  --context-length 131072 \
+  --trust-remote-code \
+  --tp 2 \
+  --tool-call-parser glm45 \
+  --reasoning-parser glm45 \
+  --mem-fraction-static 0.8 \
+  --host 0.0.0.0 \
+  --port 30000
+```
+
+如果报 `OSError: CUDA_HOME environment variable is not set` 错误，请从下面选择一种解决方式：
+
+- `export CUDA_HOME=/usr/local/cuda-<your-cuda-version>`
+
+- `pip install flashinfer-python`
 
 
+#### 多机部署
+```bash
+pip install sglang-router
 
-# 参数
-## HF 转 Megatron
-ExportArguments(model='/models/ZhipuAI/GLM-4.5-Air', model_type='glm4_5', model_revision=None, task_type='causal_lm', torch_dtype=torch.bfloat16, attn_impl=None, new_special_tokens=[], num_labels=None, problem_type=None, rope_scaling=None, device_map=None, max_memory={}, max_model_len=None, local_repo_path=None, init_strategy=None, template='glm4_5', system=None, max_length=2048, truncation_strategy='delete', max_pixels=None, agent_template=None, norm_bbox=None, use_chat_template=True, padding_free=False, padding_side='right', loss_scale='default', sequence_parallel_size=1, response_prefix=None, template_backend='swift', dataset=[], val_dataset=[], split_dataset_ratio=0.0, data_seed=42, dataset_num_proc=1, load_from_cache_file=True, dataset_shuffle=True, val_dataset_shuffle=False, streaming=False, interleave_prob=None, stopping_strategy='first_exhausted', shuffle_buffer_size=1000, download_mode='reuse_dataset_if_exists', columns={}, strict=False, remove_unused_columns=True, model_name=None, model_author=None, custom_dataset_info=[], quant_method=None, quant_bits=None, hqq_axis=None, bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True, bnb_4bit_quant_storage=None, max_new_tokens=None, temperature=None, top_k=None, top_p=None, repetition_penalty=None, num_beams=1, stream=False, stop_words=[], logprobs=False, top_logprobs=None, ckpt_dir=None, lora_modules=[], tuner_backend='peft', train_type='lora', adapters=[], external_plugins=[], seed=42, model_kwargs={}, load_args=True, load_data_args=False, packing=False, lazy_tokenize=False, cached_dataset=[], custom_register_path=[], use_hf=False, hub_token=None, ddp_timeout=18000000, ddp_backend=None, ignore_args_error=False, use_swift_lora=False, merge_lora=False, safe_serialization=True, max_shard_size='5GB', output_dir='/models/ZhipuAI/GLM-4.5-Air-mcore', quant_n_samples=256, quant_batch_size=1, group_size=128, to_cached_dataset=False, to_ollama=False, to_mcore=True, to_hf=False, mcore_model=None, mcore_adapters=[], thread_count=None, test_convert_precision=True, push_to_hub=False, hub_model_id=None, hub_private_repo=False, commit_message='update files', to_peft_format=False, exist_ok=False)
+# python -m sglang_router.launch_server --help
+# python -m sglang_router.launch_router --help
 
-## Megatron 转 HF
-args: ExportArguments(model='/models/ZhipuAI/GLM-4.5-Air', model_type='glm4_5', model_revision=None, task_type='causal_lm', torch_dtype=torch.bfloat16, attn_impl=None, new_special_tokens=[], num_labels=None, problem_type=None, rope_scaling=None, device_map=None, max_memory={}, max_model_len=None, local_repo_path=None, init_strategy=None, template='glm4_5', system=None, max_length=2048, truncation_strategy='delete', max_pixels=None, agent_template=None, norm_bbox=None, use_chat_template=False, padding_free=False, padding_side='right', loss_scale='default', sequence_parallel_size=1, response_prefix=None, template_backend='swift', dataset=[], val_dataset=[], split_dataset_ratio=0.0, data_seed=42, dataset_num_proc=1, load_from_cache_file=True, dataset_shuffle=True, val_dataset_shuffle=False, streaming=False, interleave_prob=None, stopping_strategy='first_exhausted', shuffle_buffer_size=1000, download_mode='reuse_dataset_if_exists', columns={}, strict=False, remove_unused_columns=True, model_name=None, model_author=None, custom_dataset_info=[], quant_method=None, quant_bits=None, hqq_axis=None, bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_quant_type='nf4', bnb_4bit_use_double_quant=True, bnb_4bit_quant_storage=None, max_new_tokens=None, temperature=None, top_k=None, top_p=None, repetition_penalty=None, num_beams=1, stream=False, stop_words=[], logprobs=False, top_logprobs=None, ckpt_dir='/models/megatron_output/FengHe-GLM-4.5-Air/v7-20250804-230716', lora_modules=[], tuner_backend='peft', train_type='lora', adapters=[], external_plugins=[], seed=42, model_kwargs={}, load_args=True, load_data_args=False, packing=False, lazy_tokenize=False, cached_dataset=[], custom_register_path=[], use_hf=False, hub_token=None, ddp_timeout=18000000, ddp_backend=None, ignore_args_error=False, use_swift_lora=False, merge_lora=False, safe_serialization=True, max_shard_size='5GB', output_dir='/models/megatron_output/FengHe-GLM-4.5-Air-PT', quant_n_samples=256, quant_batch_size=1, group_size=128, to_cached_dataset=False, to_ollama=False, to_mcore=False, to_hf=True, mcore_model='/models/ZhipuAI/GLM-4.5-Air-mcore', mcore_adapters=['/models/megatron_output/FengHe-GLM-4.5-Air/v7-20250804-230716'], thread_count=None, test_convert_precision=True, push_to_hub=False, hub_model_id=None, hub_private_repo=False, commit_message='update files', to_peft_format=False, exist_ok=False)
+# replace 172.16.4.52:20000 with your own node ip address and port of the first node
+
+# Node 1
+python3 -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-405B-Instruct \
+  --tp 8 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 0
+
+# Node 2
+python3 -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-405B-Instruct \
+  --tp 8 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 1
+```
+
+## 测试
+```bash
+curl http://localhost:6060/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "model": "GLM-4.5-Air",
+  "messages": [
+    {"role": "user", "content": "你好，你是谁？"}
+  ],
+  "temperature": 0.7,
+  "top_p": 0.8,
+  "top_k": 20,
+  "max_tokens": 8192,
+  "presence_penalty": 1.5,
+  "chat_template_kwargs": {"enable_thinking": false}
+}'
+```
 
