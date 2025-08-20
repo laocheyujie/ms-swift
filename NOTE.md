@@ -5,14 +5,14 @@
 
 离线的话可以提前下好 Megatron-LM
 ```bash
-git clone https://github.com/NVIDIA/Megatron-LM.git Megatron-LM --branch core_r0.13.0
+git clone git@github.com:NVIDIA/Megatron-LM.git Megatron-LM --branch core_r0.13.0
 ```
 
 ```bash
-docker pull modelscope-registry.us-west-1.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.4.0-py310-torch2.6.0-vllm0.8.5.post1-modelscope1.28.1-swift3.6.4
+docker pull modelscope-registry.cn-hangzhou.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.6.3-py311-torch2.7.1-vllm0.10.0-modelscope1.28.2-swift3.7.1
 
 
-docker run --gpus all --shm-size=128g --net=host -itd -v /data/cheyujie/models:/models -v /data/cheyujie/code/ms-swift:/mnt/workspace/ms-swift -v /data/cheyujie/code/Megatron-LM:/mnt/workspace/Megatron-LM --name ms modelscope-registry.us-west-1.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.4.0-py310-torch2.6.0-vllm0.8.5.post1-modelscope1.28.1-swift3.6.4 /bin/bash
+docker run --gpus all --shm-size=128g --net=host -itd -w /mnt/workspace -v /data/cheyujie/datasets:/datasets -v /data/cheyujie/models:/models -v /data/cheyujie/code/ms-swift:/mnt/workspace/ms-swift -v /data/cheyujie/code/Megatron-LM:/mnt/workspace/Megatron-LM --name ms modelscope-registry.cn-hangzhou.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.6.3-py311-torch2.7.1-vllm0.10.0-modelscope1.28.2-swift3.7.1 /bin/bash
 
 docker exec -it ms /bin/bash
 ```
@@ -53,8 +53,8 @@ pip config set global.extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple
 pip install --upgrade pip
 
 cd /mnt/workspace/ms-swift
+git config --global --add safe.directory /mnt/workspace/ms-swift
 pip install -e .
-pip install 'transformers>=4.54' -U
 pip install swanlab ipykernel -U
 ```
 
@@ -71,15 +71,15 @@ sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/ssh
 
 export passwd=cheyujie && printf "${passwd}\n${passwd}\n"  | passwd root 
 
+service ssh start
+
 # 测试配置
 /usr/sbin/sshd -t 
 # 没有输出就是正常
 
-service ssh start
-
 ss -lntp | grep :2333
 
-ssh -p 2333 root@ip地址
+# ssh -p 2333 root@ip地址
 
 rm -rf ~/.ssh/*
 ssh-keygen
@@ -107,6 +107,7 @@ tee hostfile <<-'EOF'
 node-1 slots=8
 node-2 slots=8
 EOF
+
 ```
 
 ### 检查网络
@@ -235,6 +236,7 @@ export MEGATRON_LM_PATH='/xxx/Megatron-LM'
 ## 权重转换 HF 转 Megatron
 ```bash
 CUDA_VISIBLE_DEVICES=0 \
+MEGATRON_LM_PATH='/mnt/workspace/Megatron-LM' \
 swift export \
     --model /models/ZhipuAI/GLM-4.5-Air \
     --to_mcore true \
