@@ -353,6 +353,9 @@ def patch_mp_ddp():
 
 @contextmanager
 def patch_get_dynamic_module():
+    ''' NOTE: 临时替换（monkey-patching）dynamic_module_utils.get_cached_module_file 
+    为其增加在分布式数据并行（DDP）环境下的安全性，防止多个进程同时访问或修改缓存模块文件时产生冲突（即“竞态条件”）
+    '''
     origin_get_cached_module_file = dynamic_module_utils.get_cached_module_file
 
     def new_get_cached_module_file(pretrained_model_name_or_path, *args, **kwargs):

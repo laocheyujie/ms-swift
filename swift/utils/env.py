@@ -66,9 +66,12 @@ def is_dist():
 def is_mp() -> bool:
 
     from swift.utils import get_device_count
+    # NOTE: 单台机器的 GPU 数量
     n_gpu = get_device_count()
+    # NOTE: 单台机器启动的训练进程总数
     local_world_size = get_dist_setting()[3]
     assert n_gpu % local_world_size == 0, f'n_gpu: {n_gpu}, local_world_size: {local_world_size}'
+    # NOTE: 平均每个训练进程能分配到多少个 GPU
     if n_gpu // local_world_size >= 2:
         return True
     return False

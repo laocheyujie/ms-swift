@@ -38,9 +38,13 @@ def get_n_params_grads(model) -> Tuple[List[int], List[int]]:
     n_params, n_grads = [], []
     for p in model.parameters():
         if is_deepspeed_zero3_enabled():
+            # NOTE: ZeRO-3 为了节省显存而将模型参数分散存储在多个 GPU 上
             import deepspeed
+            # NOTE: GatheredParameters 会在其上下文中临时将分散在各个设备上的参数 p 收集（gather）到当前设备上
             context = deepspeed.zero.GatheredParameters(p)
         else:
+            # NOTE: 如果没有启用 ZeRO-3 参数 p 本身就是完整的，不需要任何操作
+            # NOTE: nullcontext() 是一个空的上下文管理器，它什么也不做，只是为了让后面的 with 语句在两种情况下都能统一使用
             context = nullcontext()
         with context:
             n_params.append(p.numel())
@@ -264,11 +268,18 @@ def find_all_linears(model, model_arch=None, extra_layers=None, sub_module=None)
 
 @contextmanager
 def safe_ddp_context(hash_id: Optional[str], use_barrier: bool = False):
+    ''' NOTE: 用于分布式训练（DDP，Distributed Data Parallel）中的安全同步/加锁
+    进入前：非 master / 非 local_master 的进程先 barrier，等待主进程
+    执行 with 里的代码
+    退出后：master 和 local_master 也会执行 barrier，保证大家在同一步骤完成
+    '''
     if use_barrier and dist.is_initialized():
         if is_dist():
             if not is_master():
+                # NOTE: 判断是不是全局主进程
                 dist.barrier()
             if not is_local_master():
+                # NOTE: 判断是不是当前机器的主进程
                 # Compatible with multi-machine scenarios,
                 # where each machine uses different storage hardware.
                 dist.barrier()
@@ -279,6 +290,7 @@ def safe_ddp_context(hash_id: Optional[str], use_barrier: bool = False):
             if is_local_master():
                 dist.barrier()
     elif hash_id is not None:
+        # NOTE: 如果没用分布式 barrier，但传入了一个 hash_id，就用 文件锁 来避免资源竞争
         lock_dir = os.path.join(get_cache_dir(), 'lockers')
         os.makedirs(lock_dir, exist_ok=True)
         file_path = hashlib.sha256(hash_id.encode('utf-8')).hexdigest() + '.lock'

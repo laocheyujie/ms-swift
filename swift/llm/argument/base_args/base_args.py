@@ -315,5 +315,29 @@ class BaseArguments(CompatArguments, GenerationArguments, QuantizeArguments, Dat
         kwargs['model_revision'] = model_revision or self.model_revision
         kwargs['task_type'] = task_type or self.task_type
         kwargs['num_labels'] = num_labels or self.num_labels
+        '''
+        kwargs:
+        {
+            'model_id_or_path': '/models/ZhipuAI/GLM-4.5-Air', 
+            'torch_dtype': torch.bfloat16, 
+            'model_type': 'glm4_5', 
+            'revision': None, 
+            'use_hf': False, 
+            'hub_token': None, 
+            'local_repo_path': None, 
+            'device_map': None, 
+            'max_memory': {}, 
+            'quantization_config': None, 
+            'attn_impl': None, 
+            'new_special_tokens': [], 
+            'rope_scaling': None, 
+            'max_model_len': None, 
+            'task_type': 'causal_lm', 
+            'num_labels': None, 
+            'problem_type': None, 
+            'init_strategy': None, 
+            'model_revision': None
+        }
+        '''
 
         return get_model_tokenizer(**kwargs)

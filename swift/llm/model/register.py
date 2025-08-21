@@ -637,6 +637,90 @@ def get_model_tokenizer(
         quantization_config=quantization_config,
         task_type=task_type,
         num_labels=num_labels)
+    '''
+    model_info:
+    ModelInfo(
+        model_type='glm4_5', 
+        model_dir='/models/ZhipuAI/GLM-4.5-Air', 
+        torch_dtype=torch.bfloat16, 
+        max_model_len=131072, 
+        quant_method=None, 
+        quant_bits=None, 
+        rope_scaling=None, 
+        is_moe_model=True, 
+        config=None, 
+        task_type='causal_lm', 
+        num_labels=None
+    )
+    
+    model_meta:
+    ModelMeta(
+        model_type='glm4_5',
+        model_groups=[
+            ModelGroup(
+                models=[
+                    Model(
+                        ms_model_id='ZhipuAI/GLM-4.5-Air-Base',
+                        hf_model_id='zai-org/GLM-4.5-Air-Base',
+                        model_path=None,
+                        ms_revision=None,
+                        hf_revision=None
+                    ),
+                    Model(
+                        ms_model_id='ZhipuAI/GLM-4.5-Air',
+                        hf_model_id='zai-org/GLM-4.5-Air',
+                        model_path=None,
+                        ms_revision=None,
+                        hf_revision=None
+                    ),
+                    Model(
+                        ms_model_id='ZhipuAI/GLM-4.5-Air-FP8',
+                        hf_model_id='zai-org/GLM-4.5-Air-FP8',
+                        model_path=None,
+                        ms_revision=None,
+                        hf_revision=None
+                    ),
+                    Model(
+                        ms_model_id='ZhipuAI/GLM-4.5-Base',
+                        hf_model_id='zai-org/GLM-4.5-Base',
+                        model_path=None,
+                        ms_revision=None,
+                        hf_revision=None
+                    ),
+                    Model(
+                        ms_model_id='ZhipuAI/GLM-4.5',
+                        hf_model_id='zai-org/GLM-4.5',
+                        model_path=None,
+                        ms_revision=None,
+                        hf_revision=None
+                    ),
+                    Model(
+                        ms_model_id='ZhipuAI/GLM-4.5-FP8',
+                        hf_model_id='zai-org/GLM-4.5-FP8',
+                        model_path=None,
+                        ms_revision=None,
+                        hf_revision=None
+                    )
+                ],
+                ignore_patterns=None,
+                requires=None,
+                tags=[]
+            )
+        ],
+        template='glm4_5',
+        get_function=<function get_model_tokenizer_with_flash_attn at 0x7f4ef8f5b740>,
+        model_arch=None,
+        architectures=['Glm4MoeForCausalLM'],
+        additional_saved_files=[],
+        torch_dtype=None,
+        is_multimodal=False,
+        is_reward=False,
+        task_type=None,
+        ignore_patterns=None,
+        requires=['transformers>=4.54'],
+        tags=[]
+    )
+    '''
 
     if device_map is None:
         device_map = get_default_device_map()

@@ -18,26 +18,34 @@ class SwiftExport(SwiftPipeline):
 
     def run(self):
         args = self.args
+        # NOTE: SWIFT 格式转 PEFT 格式
         if args.to_peft_format:
             args.adapters[0] = swift_to_peft_format(args.adapters[0], args.output_dir)
+        # NOTE: 是否合并 Lora
         if args.merge_lora:
             output_dir = args.output_dir
             if args.to_peft_format or args.quant_method or args.to_ollama or args.push_to_hub:
                 args.output_dir = None
             merge_lora(args)
             args.output_dir = output_dir  # recover
+        # NOTE: 量化
         if args.quant_method:
             quantize_model(args)
+        # NOTE: 导出到 ollama
         elif args.to_ollama:
             export_to_ollama(args)
+        # NOTE: 导出到 cached_dataset
         elif args.to_cached_dataset:
             export_cached_dataset(args)
-        elif args.to_hf or args.mcore_adapters and args.to_mcore:
+        # NOTE: 转换为 hf 格式
+        elif args.to_hf or (args.mcore_adapters and args.to_mcore):
             from swift.megatron import convert_mcore2hf
             convert_mcore2hf(args)
+        # NOTE: 转换为 mcore 格式
         elif args.to_mcore:
             from swift.megatron import convert_hf2mcore
             convert_hf2mcore(args)
+        # NOTE: 推送到 huggingface hub
         elif args.push_to_hub:
             model_dir = args.adapters and args.adapters[0] or args.model_dir
             assert model_dir, f'model_dir: {model_dir}'
