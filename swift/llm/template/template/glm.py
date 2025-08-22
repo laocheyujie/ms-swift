@@ -244,7 +244,7 @@ class GLM4_5Template(ThinkingTemplate):
         penultimate_content = res_context_list[-2] if len(res_context_list) >= 2 else None
         if isinstance(penultimate_content, str) and penultimate_content.endswith('<|observation|>') and res_context_list[-1] == '<|user|>':
             res_context_list = res_context_list[:-1]
-        answer_len -= 1
+            answer_len -= 1
         return res_context_list, loss_scale_list, answer_len
 
 
