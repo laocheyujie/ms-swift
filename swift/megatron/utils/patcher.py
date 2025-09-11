@@ -8,6 +8,7 @@ logger = get_logger()
 
 
 def patch_megatron_tokenizer(tokenizer):
+    # NOTE: 不用 megatron 的 tokenizer，用 hf 本身的 tokenizer
 
     def build_tokenizer(args):
         return tokenizer

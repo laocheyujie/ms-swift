@@ -14,6 +14,7 @@ logger = get_logger()
 
 
 class MegatronSft(SwiftSft):
+    # NOTE: 在这里指定了 args_class
     args_class = MegatronTrainArguments
     args: args_class
 

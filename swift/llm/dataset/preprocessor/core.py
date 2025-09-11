@@ -41,6 +41,7 @@ class RowPreprocessor:
             for key in keys:
                 self.columns[key] = mm_type
 
+        # NOTE: 打印的堆栈信息次数上限，这避免了在处理大数据集时被海量的相同错误刷屏
         self.traceback_limit = traceback_limit
         self._traceback_counter = 0
         self.dataset_sample = dataset_sample
@@ -172,14 +173,19 @@ class RowPreprocessor:
     def batched_preprocess(self, batched_row: Dict[str, Any], *, strict: bool,
                            ignore_max_length_error: bool) -> Dict[str, Any]:
         from ...template import MaxLengthError
+        # NOTE: 一个批次的数据 batched_row（通常是一个字典，其中每个键的值是一个列表）
         batched_row = dict(batched_row)
         assert len(batched_row) > 0
+        # NOTE: 为了兼容流式处理，把 `__@` 前缀的特征去掉 `__@`
         self._remove_prefix_keys(batched_row, '__@')  # compat streaming
+        # NOTE: 将批次列式数据（如 {'text': ['a', 'b']}）转换为行式数据（如 [{'text': 'a'}, {'text': 'b'}]）
+        # 这样做是为了方便接下来对每一条数据进行独立处理
         rows = self.batched_to_rows(batched_row)
 
         new_rows = []
         for row in rows:
             try:
+                # NOTE: 核心数据处理方法
                 row = self.preprocess(row)
                 # support [row1, row2, ...]
                 if row is None:
@@ -187,6 +193,7 @@ class RowPreprocessor:
                 if isinstance(row, dict):
                     row = [row]
                 for r in row:
+                    # NOTE: 对数据逐条进行校验
                     self._check_objects(r)
                     self._check_messages(r)
                     self._check_rejected_response(r)
@@ -204,9 +211,11 @@ class RowPreprocessor:
                     self._traceback_counter += 1
                 row = []
             new_rows += row
+        # NOTE: 将行式数据（如 [{'text': 'a'}, {'text': 'b'}]）转换为列式数据（如 {'text': ['a', 'b']}）
         res = self.rows_to_batched(new_rows)
         self._remove_prefix_keys(res, '__#')  # compat GRPO
         if len(res) == 0:
+            # NOTE: 如果整个批次的所有数据都被丢弃了，确保返回的字典中仍然有一个 messages 键，其值为一个空列表，以维持数据结构的一致性
             res['messages'] = []
 
         return res

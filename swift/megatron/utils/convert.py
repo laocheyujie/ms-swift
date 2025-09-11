@@ -159,7 +159,10 @@ def convert_hf2mcore(args: ExportArguments) -> None:
     hf_model, template = prepare_model_template(args)
     processor = template.processor
     if args.thread_count is None:
+        # NOTE: 计算 checkpoint 大小 (GB)
+        # NOTE: get_n_params_grads(hf_model)[0]: 获取模型每一层的参数量
         checkpoint_size = sum(get_n_params_grads(hf_model)[0]) * torch.finfo(args.torch_dtype).bits // 8e9
+        # NOTE: Megatron 默认 10GB 一个 shard
         args.thread_count = max(math.ceil(checkpoint_size / 10), 2)  # 10GB
     patch_torch_dist_shard(args.thread_count)
 
@@ -178,8 +181,10 @@ def convert_hf2mcore(args: ExportArguments) -> None:
     extra_args_provider = megatron_model_meta.extra_args_provider
     initialize_megatron(extra_args_provider=extra_args_provider, args_defaults=extra_args)
 
+    # NOTE: 获取 `GPTModel` 实例
     mg_model = megatron_model_meta.model_provider()
     logger.info('Megatron model created successfully.')
+    # NOTE: 根据两种模型类型做对应权重的拷贝
     megatron_model_meta.convert_hf2mcore(hf_model, mg_model)
     if args.test_convert_precision:
         test_convert_precision(hf_model, mg_model, template)

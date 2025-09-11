@@ -270,10 +270,27 @@ swift export \
 经验：
 
 1. full: lr 1e-5, min_lr 1e-6; lora: lr 1e-4, min_lr 1e-5
+2. packing: false (数据量呈现长文本较多时用 packing 可以，但是 packing 会稀释短文本的 gradient，可以先 packing 后取消)
+3. 先确定训练数据的最大 Token Length，再调整 max_length
 
 
-## Tools
-### 训练数据格式
+### LoRA 继续训练
+1. 把最后一次 iter 的权重同步到所有节点上
+2. 把主节点 LoRA 保存位置的 `args.json` 同步到所有节点上
+3. 把 `latest_checkpointed_iteration.txt` 同步到所有节点上
+4. 训练脚本增加 `--adapter_load /models/xxx/vxxx` 注意写到 iter 的上一层，脚本会读取该路径下的 `args.json` 和最后迭代数来加载 LoRA
+5. 可以修改 `--dataset`, `--max_epochs` 等参数，但建议不要修改 LoRA 相关参数
+6. `--finetune true` 会重开一个训练，迭代数重置为 0，不会跳过任何数据集；`--finetune false` 还没测试，应该是会加载之前的状态，继续训练
+
+
+### 训练数据
+```json
+{"messages": [{"role": "system", "content": "<system>"}, {"role": "user", "content": "<query1>"}, {"role": "assistant", "content": "<response1>"}, {"role": "user", "content": "<query2>"}, {"role": "assistant", "content": "<response2>"}]}
+```
+
+
+### Tools / Agent 训练
+#### 训练数据格式
 ```json
 {"tools": "[{\"type\": \"function\", \"function\": {\"name\": \"realtime_aqi\", \"description\": \"天气预报。获取实时空气质量。当前空气质量，PM2.5，PM10信息\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"城市名，例如：上海\"}}, \"required\": [\"city\"]}}}]", "messages": [{"role": "user", "content": "北京和上海今天的天气情况"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"北京\"}}"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"上海\"}}"}, {"role": "tool_response", "content": "{\"city\": \"北京\", \"aqi\": \"10\", \"unit\": \"celsius\"}"}, {"role": "tool_response", "content": "{\"city\": \"上海\", \"aqi\": \"72\", \"unit\": \"fahrenheit\"}"}, {"role": "assistant", "content": "根据天气预报工具，北京今天的空气质量指数为10，属于良好水平；上海今天的空气质量指数为72，属于轻度污染水平。"}]}
 ```
@@ -342,7 +359,7 @@ for d in datasets:
         f.write("\n")
 ```
 
-### 测试
+#### 测试 Agent Template
 ```py
 from swift.llm import get_model_tokenizer, get_template
 
@@ -375,26 +392,10 @@ print(f'[LABELS] {template.safe_decode(encoded["labels"])}')
 每个列表的第一个值表示“字段本身”的权重，第二个值表示该字段“结果”的权重
 
 
-
-## 权重转换 Megatron 转 HF
-
-先把分散在不同机器上的权重移到一起
-
-### Full
-```bash
-CUDA_VISIBLE_DEVICES=0 \
-swift export \
-    --mcore_model /models/megatron_output/GLM-4.5-Air-SFT/vx-xxx \
-    --to_hf true \
-    --torch_dtype bfloat16 \
-    --output_dir /models/megatron_output/GLM-4.5-Air-HF/vx-xxx-hf \
-    --test_convert_precision true
-```
-> - test_convert_precisio: 测试HF和Megatron格式权重转换的精度误差，若出现内存不足，请将`--test_convert_precision true`删除
-
 ## LoRA
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+MEGATRON_LM_PATH='/mnt/workspace/Megatron-LM' \
 swift export \
     --mcore_adapters megatron_output/Qwen3-235B-A22B-Instruct-2507/vx-xxx \
     --to_hf true \
@@ -415,6 +416,38 @@ swift export \
     --test_convert_precision true
 ```
 > - model_type: glm4_5
+
+
+## 合并 LoRA
+仅 Merge LoRA，而不转成 HF 格式权重:
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+MEGATRON_LM_PATH='/mnt/workspace/Megatron-LM' \
+swift export \
+    --mcore_adapters megatron_output/Qwen2.5-7B-Instruct/vx-xxx \
+    --to_mcore true \
+    --torch_dtype bfloat16 \
+    --output_dir megatron_output/Qwen2.5-7B-Instruct/vx-xxx-mcore \
+    --test_convert_precision true
+```
+
+
+## 权重转换 Megatron 转 HF
+
+先把分散在不同机器上的权重移到一起
+
+### Full
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+swift export \
+    --mcore_model /models/megatron_output/GLM-4.5-Air-SFT/vx-xxx \
+    --to_hf true \
+    --torch_dtype bfloat16 \
+    --output_dir /models/megatron_output/GLM-4.5-Air-HF/vx-xxx-hf \
+    --test_convert_precision true
+```
+> - test_convert_precisio: 测试HF和Megatron格式权重转换的精度误差，若出现内存不足，请将`--test_convert_precision true`删除
+
 
 
 ## 推理
@@ -589,3 +622,18 @@ curl http://localhost:6060/v1/chat/completions -H "Content-Type: application/jso
 }'
 ```
 
+# 新增模型
+1. swift/llm/model/constant.py 新增 model 类型 `LLMModelType` | `BertModelType` | `RMModelType` | `MLLMModelType`
+2. swift/llm/template/constant.py 新增 template 类型 `LLMTemplateType` | `RMTemplateType` | `MLLMTemplateType`
+3. swift/llm/template/template 下面通过 `register_template(TemplateMeta)` 注册新增加的 template, `TemplateMeta`:
+    1. `template_type`
+    2. `template_cls`
+    3. `prefix`, `suffix`, `prompt`, `default_system`, ...
+4. swift/llm/model/model 下面通过 `register_model(ModelMeta)` 注册新增加的 model, `ModelMeta`:
+    1. `model_type = LLMModelType.new_model_name`
+    2. `model_groups`
+    3. `template = TemplateType.new_model_name`
+    4. `get_function`
+    5. `architectures`
+    6. `requires`: transformers 版本要求
+5. 

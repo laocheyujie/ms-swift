@@ -294,8 +294,10 @@ class BaseArguments(CompatArguments, GenerationArguments, QuantizeArguments, Dat
             set_device()
 
     def get_template(self, processor: Optional['Processor'], template_type: Optional[str] = None) -> 'Template':
+        # NOTE: 先根据 TemplateArguments 相关参数获取 padding, truncation_strategy, remove_unused_columns 等信息
         template_kwargs = self.get_template_kwargs()
         template_type = template_type or self.template
+        # NOTE: 再拿到 template_type 对应的 Template 类实例
         template = get_template(template_type, processor, **template_kwargs)
         return template
 

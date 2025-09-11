@@ -1248,6 +1248,7 @@ class Template(ProcessorMixin):
         if not self.use_megatron or cp_size == 1:
             return
         input_ids = encoded['input_ids']
+        # NOTE: 计算需要添加的填充（padding）长度，以确保 input_ids 的总长度是 cp_size * 2 的整数倍
         padding_len = math.ceil(len(input_ids) / (cp_size * 2)) * (cp_size * 2) - len(input_ids)
         input_ids += [self.tokenizer.pad_token_id] * padding_len
         encoded['labels'] += [-100] * padding_len

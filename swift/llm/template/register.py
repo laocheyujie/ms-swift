@@ -38,6 +38,24 @@ def get_template(
     template_backend: Literal['swift', 'jinja'] = 'swift',
 ) -> 'Template':
     template_meta = TEMPLATE_MAPPING[template_type]
+    '''
+    GLM4_5TemplateMeta(
+        template_type='glm4_5', 
+        prefix=['[gMASK]<sop>'], 
+        prompt=['<|user|>\n{{QUERY}}<|assistant|>\n'], 
+        chat_sep=[], 
+        suffix=['<|user|>'], 
+        template_cls=<class 'swift.llm.template.template.utils.ThinkingTemplate'>, 
+        system_prefix=['[gMASK]<sop><|system|>\n{{SYSTEM}}'], 
+        default_system=None, 
+        response_prefix='', 
+        auto_add_bos=True, 
+        stop_words=['<|endoftext|>', 
+        '<|user|>', 
+        '<|observation|>'], 
+        agent_template='glm4_5'
+    )
+    '''
     template_cls = template_meta.template_cls
     return template_cls(
         processor,

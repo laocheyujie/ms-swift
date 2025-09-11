@@ -44,6 +44,7 @@ config_mapping = {
 
 
 def convert_hf_config(config) -> Dict[str, Any]:
+    # NOTE: 把 HF 的层名 转换成 Megatron 的层名
     megatron_config = {}
     for k, hf_keys in config_mapping.items():
         for hf_k in hf_keys:

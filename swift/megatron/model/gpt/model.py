@@ -33,6 +33,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
     use_te = args.transformer_impl == 'transformer_engine'
 
     if args.record_memory_history:
+        # NOTE:  PyTorch 中用于调试 CUDA 显存不足（OOM）错误的一个功能，记录 PyTorch 在 CUDA 上的内存分配和释放历史
         torch.cuda.memory._record_memory_history(
             True,
             # keep 100,000 alloc/free events from before the snapshot
@@ -42,8 +43,10 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
             trace_alloc_record_context=True)
 
         def oom_observer(device, alloc, device_alloc, device_free):
+            # NOTE: 注册OOM观察者,会在发生 CUDA 显存不足错误时被自动调用
             # snapshot right after an OOM happened
             print('saving allocated state during OOM')
+            # NOTE: OOM 错误发生时，oom_observer 函数会立即获取当前 CUDA 显存的快照（snapshot）
             snapshot = torch.cuda.memory._snapshot()
             from pickle import dump
             dump(snapshot, open(f'oom_rank-{torch.distributed.get_rank()}_{args.memory_snapshot_path}', 'wb'))
@@ -116,5 +119,75 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
             seq_len_interpolation_factor=args.rotary_seq_len_interpolation_factor,
             mtp_block_spec=mtp_block_spec,
         )
+        # GPTModel(
+        #     (embedding): LanguageModelEmbedding(
+        #         (word_embeddings): VocabParallelEmbedding()
+        #         (embedding_dropout): Dropout(p=0.0, inplace=False)
+        #     )
+        #     (rotary_pos_emb): RotaryEmbedding()
+        #     (decoder): TransformerBlock(
+        #         (layers): ModuleList(
+        #         (0): TransformerLayer(
+        #             (input_layernorm): IdentityOp()
+        #             (self_attention): SelfAttention(
+        #             (core_attention): TEDotProductAttention(
+        #                 (flash_attention): FlashAttention()
+        #                 (fused_attention): FusedAttention()
+        #                 (unfused_attention): UnfusedDotProductAttention(
+        #                 (scale_mask_softmax): FusedScaleMaskSoftmax()
+        #                 (attention_dropout): Dropout(p=0.0, inplace=False)
+        #                 )
+        #             )
+        #             (linear_proj): TERowParallelLinear(in_features=12288, out_features=4096, bias=False, TP=1)
+        #             (linear_qkv): TELayerNormColumnParallelLinear(in_features=4096, out_features=14336, bias=True, TP=1)
+        #             (q_layernorm): IdentityOp()
+        #             (k_layernorm): IdentityOp()
+        #             )
+        #             (pre_cross_attn_layernorm): IdentityOp()
+        #             (cross_attention): IdentityOp()
+        #             (cross_attn_bda): IdentityFuncOp()
+        #             (pre_mlp_layernorm): IdentityOp()
+        #             (mlp): MLP(
+        #             (linear_fc1): TELayerNormColumnParallelLinear(in_features=4096, out_features=21888, bias=False, TP=1)
+        #             (linear_fc2): TERowParallelLinear(in_features=10944, out_features=4096, bias=False, TP=1)
+        #             )
+        #         )
+        #         (1-45): 45 x TransformerLayer(
+        #             (input_layernorm): IdentityOp()
+        #             (self_attention): SelfAttention(
+        #             (core_attention): TEDotProductAttention(
+        #                 (flash_attention): FlashAttention()
+        #                 (fused_attention): FusedAttention()
+        #                 (unfused_attention): UnfusedDotProductAttention(
+        #                 (scale_mask_softmax): FusedScaleMaskSoftmax()
+        #                 (attention_dropout): Dropout(p=0.0, inplace=False)
+        #                 )
+        #             )
+        #             (linear_proj): TERowParallelLinear(in_features=12288, out_features=4096, bias=False, TP=1)
+        #             (linear_qkv): TELayerNormColumnParallelLinear(in_features=4096, out_features=14336, bias=True, TP=1)
+        #             (q_layernorm): IdentityOp()
+        #             (k_layernorm): IdentityOp()
+        #             )
+        #             (pre_cross_attn_layernorm): IdentityOp()
+        #             (cross_attention): IdentityOp()
+        #             (cross_attn_bda): IdentityFuncOp()
+        #             (pre_mlp_layernorm): RMSNorm()
+        #             (mlp): MoELayer(
+        #             (router): TopKRouter()
+        #             (experts): TEGroupedMLP(
+        #                 (linear_fc1): TEColumnParallelGroupedLinear()
+        #                 (linear_fc2): TERowParallelGroupedLinear()
+        #             )
+        #             (shared_experts): SharedExpertMLP(
+        #                 (linear_fc1): TEColumnParallelLinear(in_features=4096, out_features=2816, bias=False, TP=1)
+        #                 (linear_fc2): TERowParallelLinear(in_features=1408, out_features=4096, bias=False, TP=1)
+        #             )
+        #             )
+        #         )
+        #         )
+        #         (final_layernorm): RMSNorm()
+        #     )
+        #     (output_layer): ColumnParallelLinear(in_features=4096, out_features=151552, bias=False, TP=1)
+        #     )
 
     return model

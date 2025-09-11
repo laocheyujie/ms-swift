@@ -129,6 +129,7 @@ def add_version_to_work_dir(work_dir: str) -> str:
     time = dt.datetime.now().strftime('%Y%m%d-%H%M%S')
     sub_folder = f'v{version}-{time}'
     if dist.is_initialized() and is_dist():
+        # NOTE: 如果是分布式训练，则需要将 sub_folder 以 list 的形式广播到所有进程
         obj_list = [sub_folder]
         dist.broadcast_object_list(obj_list)
         sub_folder = obj_list[0]
@@ -141,8 +142,10 @@ _T = TypeVar('_T')
 
 
 def parse_args(class_type: Type[_T], argv: Optional[List[str]] = None) -> Tuple[_T, List[str]]:
+    # NOTE: 使用 `HfArgumentParser` 解析指定参数类型的参数 e.g. <class 'swift.megatron.argument.train_args.MegatronTrainArguments'>
     parser = HfArgumentParser([class_type])
     if argv is None:
+        # NOTE: 读入启动命令里的参数
         argv = sys.argv[1:]
     if len(argv) > 0 and argv[0].endswith('.json'):
         json_path = os.path.abspath(os.path.expanduser(argv[0]))

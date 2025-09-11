@@ -402,9 +402,13 @@ class MegatronArguments(ExtraMegatronArguments):
         new_args = []
         args_dict = asdict(self)
         extra_args = {}
+        # NOTE: extra_megatron_kwargs 提供了一个灵活的通道来传递实验性的非 Megatron 标准参数
         extra_megatron_kwargs = args_dict.pop('extra_megatron_kwargs')
         args_dict.update(extra_megatron_kwargs)
         for k, value in args_dict.items():
+            # NOTE: MegatronArguments.__annotations__: 获取 MegatronArguments 这个数据类（dataclass）中定义的所有字段（即参数）的名称和类型注解
+            # NOTE: 标准参数：在 MegatronArguments 类及其父类中明确定义的参数（例如 micro_batch_size, lr 等）
+            # NOTE: 非标准参数：不由 MegatronArguments 直接定义的参数
             if k not in MegatronArguments.__annotations__ and k not in extra_megatron_kwargs:
                 extra_args[k] = value
                 continue

@@ -25,9 +25,11 @@ class SwiftPipeline(ABC, ProcessorMixin):
         self._compat_dsw_gradio(args)
 
     def _parse_args(self, args: Optional[Union[List[str], args_class]] = None) -> args_class:
+        # self.args_class: <class 'swift.megatron.argument.train_args.MegatronTrainArguments'>
         if isinstance(args, self.args_class):
             return args
         assert self.args_class is not None
+        # NOTE: 使用 `HfArgumentParser` 解析参数
         args, remaining_argv = parse_args(self.args_class, args)
         if len(remaining_argv) > 0:
             if getattr(args, 'ignore_args_error', False):

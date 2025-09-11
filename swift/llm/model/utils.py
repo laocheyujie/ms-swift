@@ -166,6 +166,7 @@ class HfConfigFactory:
             'max_sequence_length',
             'max_seq_length',
         ]
+        # NOTE: 不同的模型最大长度的 key 不同，依次尝试获取
         for key in possible_keys:
             max_len_key = HfConfigFactory.get_config_attr(config, key)
             if max_len_key is not None:

@@ -476,6 +476,7 @@ def _patch_mla_attention():
             #     q_compressed: [s, b, q_lora_rank / TP]
             # elif linear_q_down_proj is Linear:
             #     q_compressed: [s / TP, b, q_lora_rank]
+            # NOTE: 如果配置了 LoRA，会先通过一个“下投影”线性层 (linear_q_down_proj) 将 hidden_states 压缩到一个低秩空间 (q_compressed)
             q_compressed, _ = self.linear_q_down_proj(hidden_states)
 
             # When output is sharded (ColumnParallelLinear), two things are needed to be
@@ -484,8 +485,10 @@ def _patch_mla_attention():
             #   2. Scatter sequence back to s / TP if sequence-parallel since it was
             #      gathered by ColumnParallelLinear.
             if q_compressed.size(-1) != self.config.q_lora_rank:
+                # NOTE: 将分散的张量拼接（gather）成完整的张量进行计算
                 q_compressed = gather_from_tensor_model_parallel_region(q_compressed)
                 if self.config.sequence_parallel:
+                    # NOTE: 如果配置了序列并行，则将计算结果切分（scatter）回各个 GPU
                     q_compressed = scatter_to_sequence_parallel_region(q_compressed)
 
             q_compressed = self.q_layernorm(q_compressed)
@@ -703,16 +706,23 @@ def _patch_TransformerLayer():
         """
         megatron_core_013 = version.parse(megatron.core.__version__) >= version.parse('0.13.0rc0')
         if not megatron_core_013:
+            # NOTE: 如果版本低于 0.13.0rc0，那么这个 patch 就不生效，直接调用原始的 forward 方法
             return _origin_forward(self, *_args, **kwargs)
         hidden_states, context = self._forward_attention(*_args, **kwargs)
         args = get_args()
+        # NOTE: MLP Padding-Free 优化：在进入 MLP 层之前，暂时移除掉所有的 padding 部分，只对有效的、非 padding 的数据进行计算，计算完之后再把结果放回到原始张量的对应位置
         mlp_padding_free = args.mlp_padding_free and 'attention_mask' in kwargs
         if mlp_padding_free:
+            # NOTE: 值为 True 的位置是真实 token
             mask = (kwargs['attention_mask'].sum(dim=(1, 3)) > 0).t()
+            # NOTE: 从 hidden_states 中只选取真实 token 对应的部分
             hidden_states = hidden_states[mask][:, None]
+        # NOTE: 将这个压缩后的、更小的 hidden_states 传入 _forward_mlp 方法进行计算
         output = self._forward_mlp(hidden_states, kwargs.get('inference_context', None))
         if mlp_padding_free:
+            # NOTE: 创建一个和原始 hidden_states 形状相同、内容全为零的新张量 new_output
             new_output = hidden_states.new_zeros((*mask.shape, output.shape[-1]))
+            # NOTE: 使用同一个 mask，将 output 的计算结果“填充”回 new_output 中对应的位置
             new_output[mask] = output.squeeze(1)
             output = new_output
         return output, context
@@ -735,6 +745,7 @@ def _patch_flash_attn():
     # flash_attention_3
     if is_flash_attn_3_available():
         import flash_attn_interface
+        # NOTE: 将来如果任何代码尝试 `import flash_attn_3.flash_attn_interface`，不要去寻找对应的文件，直接用已经加载好的 flash_attn_interface 模块
         sys.modules['flash_attn_3.flash_attn_interface'] = flash_attn_interface
 
 
@@ -819,6 +830,7 @@ def _patch_megatron():
 
 
 def init_megatron_env() -> None:
+    # NOTE: 根据 `MEGATRON_LM_PATH` 来安装或者下载 megatron
     if 'MEGATRON_LM_PATH' not in os.environ:
         os.environ['MEGATRON_LM_PATH'] = git_clone_github(
             'https://github.com/NVIDIA/Megatron-LM', branch='core_r0.13.0')

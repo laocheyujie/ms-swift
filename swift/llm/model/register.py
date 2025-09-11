@@ -486,6 +486,7 @@ def _get_model_info(model_dir: str, model_type: Optional[str], quantization_conf
     torch_dtype = HfConfigFactory.get_torch_dtype(config, quant_info)
     max_model_len = HfConfigFactory.get_max_model_len(config)
     rope_scaling = HfConfigFactory.get_config_attr(config, 'rope_scaling')
+    # NOTE: 通过 class_name 和 expert key 判断是否是 MOE 模型
     is_moe_model = HfConfigFactory.is_moe_model(config)
 
     if model_type is None:
@@ -540,6 +541,22 @@ def get_model_info_meta(
 
     model_type = model_type or getattr(model_meta, 'model_type', None)
     model_info = _get_model_info(model_dir, model_type, quantization_config=quantization_config)
+    '''
+    model_info:
+    ModelInfo(
+        model_type='glm4_5', 
+        model_dir='/models/ZhipuAI/GLM-4.5-Air', 
+        torch_dtype=torch.bfloat16, 
+        max_model_len=131072, 
+        quant_method=None, 
+        quant_bits=None, 
+        rope_scaling=None, 
+        is_moe_model=True, 
+        config=None, 
+        task_type=None, 
+        num_labels=None
+    )
+    '''
     if model_type is None and model_info.model_type is not None:
         model_type = model_info.model_type
         logger.info(f'Setting model_type: {model_type}')

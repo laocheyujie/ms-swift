@@ -72,6 +72,8 @@ def _patch_deepcopy():
     _origin_deepcopy = copy.deepcopy
 
     def new_deepcopy(x, *args, **kwargs):
+        # NOTE: tp_group 通常包含一些不能被标准 deepcopy 处理的资源（比如网络连接、线程锁），或者它本身就不应该被复制，而应该在多个对象间共享
+        # 所以通过这种方式可以绕过对 tp_group 对象的直接拷贝
         if getattr(x, 'tp_group', None) is not None:
             origin_tp_group = x.tp_group
             x.tp_group = None
@@ -93,6 +95,8 @@ def prepare_adapter(model):
     from swift.tuners import LoraConfig, Swift
     args = get_args()
     set_linear_is_expert(model)
+    # NOTE: 获取 LoRA 的训练模块
+    # ['o_proj', 'v_proj', 'gate_proj', 'q_proj', 'down_proj', 'k_proj', 'up_proj']
     target_modules = get_target_modules(args, model)
     modules_to_save = get_modules_to_save(args, model)
     lora_kwargs = {
@@ -135,26 +139,35 @@ def prepare_mcore_model(model):
 
 @contextmanager
 def adapter_state_dict_context():
+    '''
+    NOTE: 在进行 LoRA 训练时，只保存模型中被训练过的部分参数（即“适配器”部分），而不是整个模型的全部参数
+    '''
     args = get_args()
     if args.train_type == 'full':
         yield
         return
+    # NOTE: generate_state_dict 负责生成模型的权重文件 (state_dict)
     _origin_generate_state_dict = checkpointing.generate_state_dict
 
     def generate_state_dict(args, model, *_args, **kwargs):
+        # NOTE: 调用原始的函数 _origin_generate_state_dict 获取完整的模型状态字典 state_dict
         state_dict = _origin_generate_state_dict(args, model, *_args, **kwargs)
+        # NOTE: 创建一个空的 new_state_dict
         new_state_dict = {}
         state_dict_model = state_dict['model']
+        # NOTE: 遍历模型的所有参数
         for n, p in model[0].named_parameters():
             if not p.requires_grad:
                 continue
             if n in state_dict_model:
+                # NOTE: 只有当参数是可训练的，才会将这个参数及其关联的 _extra_state 从原始 state_dict 中筛选出来，放入 new_state_dict
                 new_state_dict[n] = state_dict_model[n]
             key = n.replace('.weight', '._extra_state')
             if key.endswith('._extra_state0'):
                 key = key.replace('._extra_state0', '._extra_state')
             if key in state_dict_model:
                 new_state_dict[key] = state_dict_model[key]
+        # NOTE: 用这个只包含可训练参数的 new_state_dict 替换掉完整 state_dict 中的 model 部分，并返回
         state_dict['model'] = new_state_dict
         return state_dict
 

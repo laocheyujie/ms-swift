@@ -116,18 +116,26 @@ class BaseMegatronTrainer(ABC):
         # https://github.com/NVIDIA/Megatron-LM/issues/1380
 
         def sh_ten_merge_fn(sub_state_dict):
+            # NOTE: 高效合并路径（零拷贝）
             with torch.no_grad():
+                # NOTE: 获取列表中第一个张量的底层数据存储区
                 shared_storage = sub_state_dict[0].untyped_storage()
+                # NOTE: 通过比较每个张量 Storage 的内存地址 (data_ptr()) 检查列表中的所有张量是否都共享完全相同的底层 Storage
                 if all(shared_storage.data_ptr() == tensor.untyped_storage().data_ptr() for tensor in sub_state_dict):
                     element_size = sub_state_dict[0].element_size()
                     total_numel = sum(tensor.numel() for tensor in sub_state_dict)
+                    # NOTE: 确保共享的存储区大小正好等于所有张量元素占用的总大小
                     if shared_storage.nbytes() == total_numel * element_size:
+                        # NOTE: 如果以上所有检查都通过，说明这些张量实际上只是一个更大的、连续的张量被切分成的不同“视图（views）”
                         dim_0 = sum(tensor.shape[0] for tensor in sub_state_dict)
+                        # NOTE: 计算出合并后完整张量的形状（shape）
                         shape = (dim_0, ) + sub_state_dict[0].shape[1:]
+                        # NOTE: 创建一个新的、正确形状的空张量，然后直接让这个新张量指向已存在的共享存储区（shared_storage）
                         combined_tensor = torch.empty(
                             shape, dtype=sub_state_dict[0].dtype,
                             device=sub_state_dict[0].device).set_(shared_storage, 0, shape)
                         return combined_tensor
+                # NOTE: 如果检查失败，则使用 torch.cat 合并
                 return torch.cat(sub_state_dict)
 
         for v in state_dict_model.values():
