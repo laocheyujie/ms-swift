@@ -23,6 +23,7 @@ class MegatronSft(SwiftSft):
 
     def __init__(self, args: Optional[Union[List[str], MegatronTrainArguments]] = None) -> None:
         self.train_msg = {}
+        # NOTE: 初始化 MegatronSft 的父类 SwiftSft，此时 args 为 None
         super(SwiftSft, self).__init__(args)
         args = self.args
         _, self.processor = args.get_model_processor(load_model=False)

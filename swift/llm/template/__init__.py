@@ -1,4 +1,5 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
+# NOTE: 这里完成了 `register_template` 的注册，更新了 `TEMPLATE_MAPPING` 字典
 from . import template
 from .base import MaxLengthError, Template
 from .constant import TemplateType

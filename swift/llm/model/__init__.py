@@ -1,4 +1,5 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
+# NOTE: 这里完成了 `register_model` 的注册，更新了 `MODEL_MAPPING` 字典
 from . import model
 from .constant import LLMModelType, MLLMModelType, ModelType
 from .model_arch import MODEL_ARCH_MAPPING, ModelArch, ModelKeys, MultiModelKeys, get_model_arch, register_model_arch

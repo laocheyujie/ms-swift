@@ -3,6 +3,7 @@ import datasets.fingerprint
 from datasets import Dataset as HfDataset
 
 from ..utils import get_temporary_cache_files_directory
+# NOTE: 这里完成了 `register_dataset` 的注册，更新了 `DATASET_MAPPING` 字典
 from . import dataset
 from .loader import DATASET_TYPE, load_dataset
 from .media import MediaResource

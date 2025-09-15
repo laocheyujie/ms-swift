@@ -184,8 +184,10 @@ def tuners_sharded_state_dict(
         sharded_offsets: Tuple[Tuple[int, int, int]] = (),
         metadata: Optional[dict] = None,
 ):
+    # NOTE: 生成分片后的状态字典，以便于模型的保存（checkpointing）
     sharded_state_dict = {}
     # Save parameters
+    # NOTE: 将参数（权重等）保存到 sharded_state_dict 中，keep_vars=True 表示直接使用原始的张量变量，而不是它们的副本
     module._save_to_state_dict(sharded_state_dict, '', keep_vars=True)
     sharded_state_dict = make_sharded_tensors_for_checkpoint(
         sharded_state_dict, prefix, sharded_offsets=sharded_offsets)
@@ -196,8 +198,10 @@ def tuners_sharded_state_dict(
         else:
             modules = [(None, module)]
         for n, m in modules:
+            # NOTE: 遍历子模块，更新 sharded_state_dict
             _prefix = f'{prefix}{name}.' if n is None else f'{prefix}{name}.{n}.'
             sharded_state_dict.update(sharded_state_dict_default(m, _prefix, sharded_offsets, metadata))
+    # NOTE: 返回构建完成的、包含了所有模块和子模块参数的分片状态字典
     return sharded_state_dict
 
 

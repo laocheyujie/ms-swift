@@ -90,6 +90,7 @@ class BaseMegatronTrainer(ABC):
                     yield from x
                     x = next_x
                 logger.info(f'Training of {i + 1} epochs has been completed, the training has finished.')
+                # NOTE: 在产出最后一个批次的数据后，在数据中注入一个特殊的标记，告诉上层的训练逻辑，所有指定的 epochs 已经训练完毕
                 x[0]['is_finished'] = True
                 yield from x
             else:

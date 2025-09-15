@@ -52,6 +52,99 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
 
 
 
+## 简版流程
+1. 初始化 megatron 运行环境 `init_megatron_env` 
+    1. 安装：确认安装 `Megatron-LM`
+    2. 打补丁：对 Megatron 打一系列补丁 `_patch_megatron`
+    3. 在导包过程中完成了模板注册 `register_template`，模型注册 `register_model_arch`, `register_model`, `register_megatron_model`，数据集注册 `register_dataset`, `register_dataset_info`
+2. `MegatronSft(args)` 实例化
+    1. 参数解析：使用父类初始化方法解析参数 `super(SwiftSft, self).__init__(args)`
+    2. Processor：获取 processor 或 tokenizer `_, self.processor = args.get_model_processor(load_model=False)`
+    3. Tokenizer 补丁：用 hf 的 tokenizer 代替 Megatron 定义的 tokenizer 方法 `patch_megatron_tokenizer`
+    4. 参数转换：将 hf 的 config 转换为 Megatron 的参数 `convert_hf_config` (`swift.megatron.model.config.py`)
+    5. Template：根据 `template_type` 准备对话模板 `self._prepare_template()` 并设置 `self.template.use_megatron = True`
+    6. 保存参数：`args.save_args(args.save)` 存储转换后的相关参数
+    7. 打 Megatron 训练补丁： `_patch_megatron`
+        1. train_step: `training.train_step = self.train_step` 使其支持 max_epochs
+        2. cyclic_iter: `training.cyclic_iter = self.new_cyclic_iter` 使其支持基于 epoch 的训练模式
+        3. evaluate: `training.evaluate = self.evaluate`
+        4. setup_model_and_optimizer: `training.setup_model_and_optimizer = self.setup_model_and_optimizer` 支持 LoRA 层的植入和权重读取
+        5. save_checkpoint: `training.save_checkpoint = self.save_checkpoint` 只保存训练参数 (required_grad = True) 的部分
+3. `MegatronSft(args).run()` 正式开始处理
+    1. Dataset：`train_dataset, val_dataset = self._prepare_dataset()`
+        1. 获取数据集：使用 `datasets.load_dataset` 加载数据集
+        2. 数据预处理：`swift.llm.dataset.preprocessor.core.AutoPreprocessor.__call__(...)`
+            1. Preprocessor：使用 `preprocessor = self._get_preprocessor(dataset)` 获取数据集对应的数据预处理器 (`MessagesPreprocessor`)
+            2. 数据批量预处理：`RowPreprocessor.__call__(...)`
+        2. 数据后处理：`train_dataset, val_dataset = DatasetLoader.post_process(...)`
+            1. 计算验证集数量
+            2. 切分数据集：`train_dataset, val_dataset = train_dataset.train_test_split(...)`
+            3. 采样或洗牌数据集：`train_dataset = sample_dataset(...)`
+        3. Encode：`train_dataset, val_dataset = self._encode_dataset(train_dataset, val_dataset)`
+            1. 获取模板 template
+            2. 保存验证集
+            3. 实例化 `preprocessor = EncodePreprocessor(...)`
+            4. 批处理：`RowPreprocessor.batched_preprocess`
+                1. Encode：`Template.encode`
+                    1. 规范化 tool
+                    2. 获取 agent_template：`agent_template = self.agent_template`
+                    3. 获取 template_meta`agent_template.template_meta = self.template_meta` 获取 template_meta
+                    4. Encode：`encoded = self._encode(inputs)`
+                        1. 对连续的 user 或 assistant 或 tool 进行 content 合并
+                        2. 获取 system 内容：`system = self._get_system(inputs)`
+                        3. 把 tools 放入 system：`system = self.agent_template._format_tools(tools, system or '', inputs.messages[0])`
+                        4. Tokenize：`token_list = self._tokenize(context)`
+                        5. Label: query 部分填充为 -100，response 保持原样
+                        6. 把 `input_ids` 填充到 `cp_size * 2` 的整数倍
+                2. Trunc：对于超过 `--max_length` 的按照 `self.truncation_strategy` 策略来截断
+        4. Concat：把所有训练数据集子集都拼接到一起
+        5. Packing：`dataset = packing_dataset_cls(...)` 
+    2. Data Collator：`data_collator = self._get_data_collator()`
+        1. 获取 data_collator：`data_collator = self.template.data_collator`
+        2. 设置 Padding
+    3. Train：`self.trainer.train(train_dataset, val_dataset, data_collator)` 开始训练
+        1. datasets_provider：`datasets_provider = get_swift_datasets_provider(train_dataset, val_dataset)`
+        2. 打补丁：对 `training.build_pretraining_data_loader` 打补丁
+        3. iters：对 `training.initialize_megatron` 打补丁以兼容 `max_epochs` 的 `train_iters` 数
+        4. model_provider：使用的是 `swift.megatron.model.gpt.model.py` 里的 `model_provider`
+        5. Pretrain：
+            1. 初始化 Megatron 环境：`initialize_megatron(...)`
+                1. 验证参数：`validate_args(args, args_defaults)`
+                2. 设置全局变量：`set_global_variables(args)`
+                3. 设置日志：`setup_logging()`
+                4. 设置随机信息：`initialize_rerun_state_machine(...)`
+                5. 分布式：`finish_mpu_init()` 主要通过 `mpu.initialize_model_parallel(...)` 设置模型并行，数据并行等各种进程组，每个 rank 对应进程都有自己全局变量
+                6. 设置自动恢复：`_init_autoresume()`
+            2. 编译融合算子：`set_jit_fusion_options`
+            3. 核心三要素（模型、优化器、优化器调度器）：`model, optimizer, opt_param_scheduler = setup_model_and_optimizer(...)`
+                1. 替换原有的 `setup_model_and_optimizer`
+                2. 打高效 cat 补丁
+                3. 做 LoRA key 映射
+                4. `model, optimizer, opt_param_scheduler = self._origin_setup_model_and_optimizer(new_model_provider_func, ...)`
+                    1. model: `model = get_model(model_provider_func, model_type)`
+                        1. base model: `self.unwrapped_model = model_provider_func(*args, **kwargs)`
+                        2. peft model: `self.peft_model = prepare_mcore_model(self.unwrapped_model)`
+                    2. ddp: `ddp_config = DistributedDataParallelConfig(**kwargs)` 根据 kwargs DDP 生成分布式配置实例
+                    3. optimizer: `optimizer = get_megatron_optimizer(...)`
+                    4. opt_param_scheduler: `opt_param_scheduler = get_optimizer_param_scheduler(optimizer)`
+                    5. 加载基础模型权重：`load_checkpoint(model, optimizer, opt_param_scheduler, ...)`
+            4. train_dataloader: `train_dataloader, valid_dataloader, test_dataloader = build_train_valid_test_data_loaders(build_train_valid_test_datasets_provider)`
+                1. `train_ds, valid_ds, test_ds = build_train_valid_test_datasets(build_train_valid_test_datasets_provider)`
+                2. `train_dataloader = build_pretraining_data_loader(train_ds, args.consumed_train_samples)`
+                3. `valid_dataloader`, `test_dataloader` 同理
+            5. data_iterator: 
+                1. `train_data_iterator = _get_iterator(dl_type, train_dataloader)`
+                2. `valid_data_iterator`, `test_data_iterator` 同理
+            6. train: `iteration, num_floating_point_operations_so_far = train(...)` 开始训练
+                1. model: 取出 model 里的 model_module `model_module.train()`
+                2. train: `train_step(forward_step_func, train_data_iterator, model, optimizer, opt_param_scheduler, config)`
+                
+
+
+
+
+
+
 ## 流程
 
 1. `swift.cli._megatron.sft.py` -> `from swift.megatron import megatron_sft_main` -> `swift.megatron.__init__.py` 会进行导包初始化
@@ -120,9 +213,10 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
             4. `self.trainer = self.prepare_trainer()` -> `return MegatronTrainer(self.args)` 实例化 `MegatronTrainer`
                 1. `BaseMegatronTrainer._patch_megatron()` 
                     1. `training.train_step = self.train_step` 加工一下使其支持 max_epochs
-                    2. `training.evaluate = self.evaluate` 加工一下 evaluation
-                    3. `training.setup_model_and_optimizer = self.setup_model_and_optimizer`
-                    4. `training.save_checkpoint = self.save_checkpoint`
+                    2. `training.cyclic_iter = self.new_cyclic_iter` 支持基于 epoch 的训练模式
+                    3. `training.evaluate = self.evaluate` 加工一下 evaluation
+                    4. `training.setup_model_and_optimizer = self.setup_model_and_optimizer`
+                    5. `training.save_checkpoint = self.save_checkpoint`
                         1. `with adapter_state_dict_context()` with 装饰器的作用是使得 `training.save_checkpoint` 时只保存训练参数 (required_grad = True) 的部分
     2. `result = self.run()` 正式开始处理
         1. dataset: `train_dataset, val_dataset = self._prepare_dataset()`
@@ -210,7 +304,7 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                                                     1. `super()._swift_prepare_inputs(inputs)` 对连续的 user 或 assistant 或 tool 进行 content 合并
                                                 3. `system = self._get_system(inputs)` 获取 system 内容
                                                     1. 获取 `input.system`
-                                                    2. 如果 `tools` 有值：`system = self.agent_template._format_tools(tools, system or '', inputs.messages[0])` 把 tools 内容编码进 system
+                                                    2. 如果 `tools` 有值：`system = self.agent_template._format_tools(tools, system or '', inputs.messages[0])` 把 tools 内容放入 system
                                                 4. `self._get_std_messages(inputs.messages)` 如果是 pretrain，因为只有 assistant，标准化为 `messages.insert(0, {'role': 'user', 'content': ''})`; 如果 messages 是奇数，在最后追加 `{'role': 'assistant', 'content': None}`
                                                 5. 如果 `template_meta.auto_add_bos`，则解析 `bos_token` 并添加到 `res_context_list`
                                                 6. 如果没有 system: `prefix = template_meta.prefix`; 如果有 system: `prefix = template_meta.system_prefix`
@@ -220,7 +314,7 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                                             2. `res_context_list, loss_scale_list = self._simplify_context_list(res_context_list, loss_scale_list, inputs)` 根据 `loss_scale_list` 合并 q, a，比如 `loss_scale_list = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0]` 合并后为 `[0.0, 1.0, 0.0, 1.0]`
                                             3. `input_ids, labels, loss_scale = self._encode_context_list(res_context_list, loss_scale_list)`
                                                 1. 对 q, a: `token_list = self._tokenize(context)`
-                                                2. label 的 q  部分填充为 -100，a 保持原样
+                                                2. label 的 q 部分填充为 -100，a 保持原样
                                             4. `self._add_dynamic_eos(...)`
                                             5. `self._handle_megatron_cp(encoded)` 把 `input_ids` 填充到 `cp_size * 2` 的整数倍
                                             6. 返回 `encoded`
@@ -281,7 +375,7 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                     6. `_init_autoresume()` 自动恢复
                     7. `_compile_dependencies()`
                 2. `set_jit_fusion_options`
-                3. `model, optimizer, opt_param_scheduler = setup_model_and_optimizer(...)`：初始化时打的补丁替换，用 `swift.megatron.trainers.base.py` 里的 `setup_model_and_optimizer` Megatron 原有的 `setup_model_and_optimizer`
+                3. `model, optimizer, opt_param_scheduler = setup_model_and_optimizer(...)`：初始化时打的补丁替换，用 `swift.megatron.trainers.base.py` 里的 `setup_model_and_optimizer` 替换 Megatron 原有的 `setup_model_and_optimizer`
                     1. `with self._patch_load_state_dict()` 
                         1. `checkpointing._load_base_checkpoint = _load_base_checkpoint` 把 Megatron 的 `checkpointing._load_base_checkpoint` 替换，实现对模型参数 (`sharded_state_dict['model']`) 打高效 cat 的 `_patch_merge_fn` 补丁
                         2. lora 时做一些 key 映射
@@ -341,12 +435,12 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                                                         2. 把每一个 TransformerLayer 用 `torch.nn.ModuleList` 组装起来
                                                 4. `self.setup_embeddings_and_output_layer()` 设置 Embedding 权重的属性，标记成 `is_embedding_or_output_parameter = True`
                                             2. `new_inv_freq` 放到指定设备上
-                                            3. 返回 model (`self.unwrapped_model`)，此时显存已经加载了模型
+                                            3. 返回 model (`self.unwrapped_model`)，此时显存已经加载了模板模型
                                     2. `self.peft_model = prepare_mcore_model(self.unwrapped_model)` 这个是 `new_model_provider_func` 的关键，打上 LoRA 相关的补丁
                                         1. 如果是 `full`，根据 `freeze_parameters` 相关参数冻结网络层，根据 `trainable_parameters` 相关参数训练指定网络层
                                         2. **如果是 `lora`，`model = prepare_adapter(model)`**
                                             1. `set_linear_is_expert(model)` 把专家层标记一下
-                                            2. `target_modules = get_target_modules(args, model)` 获取 LoRA 目标 module e.g. ['o_proj', 'v_proj', 'gate_proj', 'q_proj', 'down_proj', 'k_proj', 'up_proj']
+                                            2. `target_modules = get_target_modules(args, model)` 获取 LoRA 目标 module e.g. `['o_proj', 'v_proj', 'gate_proj', 'q_proj', 'down_proj', 'k_proj', 'up_proj']`
                                             3. `modules_to_save = get_modules_to_save(args, model)` 获取要保存的模块
                                             4. `lora_config = LoraConfig(...)` 生成 LoRA 配置项
                                             5. `model = Swift.prepare_model(model, lora_config)`
@@ -396,7 +490,7 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                             6. `del dense_model_for_upcycling` 删除临时的密集模型以释放显存
                             7. `optimizer.reload_model_params()` 如果使用了fp16或bf16混合精度训练，由于模型参数被直接修改了，需要调用这个方法来确保优化器内部的状态和新的模型参数是同步的
                         7. 如果配置了基础模型 `args.load` 或 `args.pretrained_checkpoint`：`load_checkpoint(model, optimizer, opt_param_scheduler, ...)` 开始加载模型权重
-                            1. `state_dict, checkpoint_name, release, ckpt_type = _load_base_checkpoint(...)`此时激活了补丁里的 `with self._patch_load_state_dict()`，会调用补丁里的 `_load_base_checkpoint`
+                            1. `state_dict, checkpoint_name, release, ckpt_type = _load_base_checkpoint(...)` 此时激活了补丁里的 `with self._patch_load_state_dict()`，会调用补丁里的 `_load_base_checkpoint`
                                 1. 打一些合并的补丁，再调用 `origin__load_base_checkpoint`，即 `megatron.training.checkpointing.py` 里的 `_load_base_checkpoint`
                                     1. 读取 `latest_checkpointed_iteration.txt` 里的迭代步数
                                     2. 根据 `ckpt_format` 的不同类型（`torch_dist`, `torch`, `torch_dcp`）使用不同的加载方法，比如 `_load_global_dist_base_checkpoint`
@@ -416,7 +510,7 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                                     1. 对于 `ShardedTensorFactory` 的张量，替换 `v.merge_fn = sh_ten_merge_fn`
                                 3. `res = origin__load_base_checkpoint(*_args, **kwargs)`，即 `megatron.training.checkpointing.py` 里的 `_load_base_checkpoint` -> `_load_global_dist_base_checkpoint` 此时 `rank0=False`
                                     1. `state_dict = dist_checkpointing.load(...)`
-                                        1. `common_state_dict = common_strategy.load_common(checkpoint_dir)` 加载 `静态字典`
+                                        1. `common_state_dict = common_strategy.load_common(checkpoint_dir)` 加载静态字典
                                         2. `sharded_state_dict, _ = extract_sharded_base(...)` 提取出 `ShardedBase` 的模型层
                                         3. `local_metadata, global_metadata = determine_global_metadata(sharded_state_dict)`
                                             1. `local_metadata = [ten.without_data() for ten in nested_values(sharded_state_dict)]` 获取本卡的元数据
@@ -426,12 +520,12 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                                         6. 返回 `common_state_dict`
                                 4. 加载后的模型 state_dict 再还原回原来的层名
                             5. 接下来是一系列检查操作：
-                                1. 设置迭代信息: 从 `state_dict` 中恢复 `iteration`, `num_floating_point_operations_so_far` 等训练状态，如果是在微调模式下，`iteration` 会被重置为 0
+                                1. 设置迭代信息: 从 `state_dict` 中恢复 `iteration`, `num_floating_point_operations_so_far` 等训练状态，如果是在 `finetune` 微调模式下，`iteration` 会被重置为 0
                                 2. 检查参数一致性: 检查当前运行的参数和检查点中保存的参数是否兼容
-                                3. 恢复模型权重: 除非 `skip_load_to_model_and_opt` 为 True，否则会调用 `model.load_state_dict()` 将 `state_dict` 中的权重加载到 DDP 模型中。这里有一个 try-except 的回退机制，如果严格加载失败，会尝试非严格加载，以兼容某些库（如 TransformerEngine）的向后不兼容更改。
-                                4. 修复 QKV 矩阵顺序: 调用 `fix_query_key_value_ordering` 来处理不同版本 Megatron 中 Attention 模块权重顺序可能不一致的问题。
-                                5. 恢复优化器和学习率调度器状态: 如果不是微调模式，且没有指定 `--no-load-optim`，则会加载优化器和调度器的状态。
-                                6. 恢复 RNG 状态: 如果不是微调模式，且没有指定 `--no-load-rng`，则会恢复 Python random, numpy, torch, torch.cuda 的随机数生成器状态。这是保证从断点继续训练时数据加载、dropout 等随机过程可复现的关键。
+                                3. 恢复模型权重: 除非 `skip_load_to_model_and_opt` 为 True，否则会调用 `model.load_state_dict()` 将 `state_dict` 中的权重加载到 DDP 模型中。这里有一个 try-except 的回退机制，如果严格加载失败，会尝试非严格加载，以兼容某些库（如 TransformerEngine）的向后不兼容更改
+                                4. 修复 QKV 矩阵顺序: 调用 `fix_query_key_value_ordering` 来处理不同版本 Megatron 中 Attention 模块权重顺序可能不一致的问题
+                                5. 恢复优化器和学习率调度器状态: 如果不是微调模式，且没有指定 `--no-load-optim`，则会加载优化器和调度器的状态
+                                6. 恢复 RNG 状态: 如果不是微调模式，且没有指定 `--no-load-rng`，则会恢复 Python random, numpy, torch, torch.cuda 的随机数生成器状态。这是保证从断点继续训练时数据加载、dropout 等随机过程可复现的关键
                         8. 返回 `model, optimizer, opt_param_scheduler`
                     3. 如果 `train_type` 不是 `full` 并且有 `args.modules_to_save`，拷贝原始模型 `copy_original_module_weight(self.unwrapped_model)`
                     4. 如果需要 `initialize_embedding`，把原始模型的 Embedding 层权重初始化 `self._initialize_embedding(self.unwrapped_model)`

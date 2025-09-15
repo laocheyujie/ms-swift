@@ -835,6 +835,7 @@ def init_megatron_env() -> None:
         os.environ['MEGATRON_LM_PATH'] = git_clone_github(
             'https://github.com/NVIDIA/Megatron-LM', branch='core_r0.13.0')
     with safe_ddp_context(hash_id='megatron-lm'):
+        # NOTE: 如果 megatron 没有安装，则安装
         if not is_megatron_available():
             subprocess_run([sys.executable, '-m', 'pip', 'install', '-e', os.environ['MEGATRON_LM_PATH']])
     sys.path.insert(0, os.environ['MEGATRON_LM_PATH'])

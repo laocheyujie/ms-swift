@@ -2,4 +2,5 @@
 from swift.megatron import megatron_sft_main
 
 if __name__ == '__main__':
+    # NOTE: Megatron sft 的入口
     megatron_sft_main()

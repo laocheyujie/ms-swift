@@ -25,7 +25,7 @@ class SwiftPipeline(ABC, ProcessorMixin):
         self._compat_dsw_gradio(args)
 
     def _parse_args(self, args: Optional[Union[List[str], args_class]] = None) -> args_class:
-        # self.args_class: <class 'swift.megatron.argument.train_args.MegatronTrainArguments'>
+        # NOTE：用的是子类的 args_class 类属性 self.args_class: <class 'swift.megatron.argument.train_args.MegatronTrainArguments'>
         if isinstance(args, self.args_class):
             return args
         assert self.args_class is not None

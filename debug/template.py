@@ -1,6 +1,7 @@
 from swift.llm import get_model_tokenizer, get_template
 
 _, tokenizer = get_model_tokenizer('/models/ZhipuAI/GLM-4.5-Air', load_model=False)
+
 template = get_template(
     tokenizer.model_meta.template, 
     tokenizer, 
