@@ -29,6 +29,11 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
     Returns:
         Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
     """
+    # NOTE: 1. 去掉了 `ModelOpt` 的内容
+    #       2. 去掉了 `vp_stage` 的内容
+    #       3. 去掉了 `qk_l2_norm` 的内容
+    #       4. 去掉了 `use_kitchen`
+    #       5. 新增兼容 qwen2_moe 的 `shared_experts` 内容
     args = get_args()
     use_te = args.transformer_impl == 'transformer_engine'
 

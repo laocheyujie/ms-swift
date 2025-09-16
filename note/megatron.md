@@ -106,7 +106,12 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
         1. datasets_provider：`datasets_provider = get_swift_datasets_provider(train_dataset, val_dataset)`
         2. 打补丁：对 `training.build_pretraining_data_loader` 打补丁
         3. iters：对 `training.initialize_megatron` 打补丁以兼容 `max_epochs` 的 `train_iters` 数
-        4. model_provider：使用的是 `swift.megatron.model.gpt.model.py` 里的 `model_provider`
+        4. model_provider：使用的是 `swift.megatron.model.gpt.model.py` 里的 `model_provider` 相较于 Megatron-LM 原版的 `model_provider`，做了如下变化：
+            1. 去掉了 `ModelOpt` 的内容
+            2. 去掉了 `vp_stage` 的内容
+            3. 去掉了 `qk_l2_norm` 的内容
+            4. 去掉了 `use_kitchen`
+            5. 新增兼容 qwen2_moe 的 `shared_experts` 内容
         5. Pretrain：
             1. 初始化 Megatron 环境：`initialize_megatron(...)`
                 1. 验证参数：`validate_args(args, args_defaults)`
@@ -138,7 +143,7 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
             6. train: `iteration, num_floating_point_operations_so_far = train(...)` 开始训练
                 1. model: 取出 model 里的 model_module `model_module.train()`
                 2. train: `train_step(forward_step_func, train_data_iterator, model, optimizer, opt_param_scheduler, config)`
-                
+
 
 
 
