@@ -694,3 +694,17 @@ curl http://localhost:6060/v1/chat/completions -H "Content-Type: application/jso
     5. `architectures`
     6. `requires`: transformers 版本要求
 
+
+
+# 报告
+## SwanLab
+安装：`pip install swanlab -i https://mirrors.aliyun.com/pypi/simple/`
+
+sh 里添加：
+- swanlab_token: SwanLab的api-key。
+- swanlab_project: swanlab的project，需要在页面中预先创建好:[https://swanlab.cn/space/~](https://swanlab.cn/space/~)。
+- swanlab_workspace: 默认为None，会使用api-key对应的username。
+- swanlab_exp_name: 实验名，可以为空，为空时默认传入--output_dir的值。
+- swanlab_lark_webhook_url: 默认为None。swanlab的lark webhook url，用于推送实验结果到飞书。
+- swanlab_lark_secret: 默认为None。swanlab的lark secret，用于推送实验结果到飞书。
+- swanlab_mode: 可选cloud和local，云模式或者本地模式。
