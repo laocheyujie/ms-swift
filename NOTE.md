@@ -1,3 +1,16 @@
+# 整体流程
+
+1. 权重转 MGT: 
+2. 编辑训练脚本: `vi train.sh`
+3. 启动训练: `nohup ./train.sh > train.log 2>&1 &`
+4. 查看 Tensorboard
+5. 把权重合并到主节点:
+    1. 先进入 `--save` 所在路径
+    2. 复制权重 `scp -r iter_0000100 node-1:/models/megatron_output/xxx/v1-20251023-200954`
+6. 权重合并及转换 HF: [脚本](#lora)
+7. 部署: sglang / vllm
+
+
 # 安装
 ## Docker 安装
 ### 启动容器
@@ -285,14 +298,32 @@ swift export \
 
 ### 训练数据
 ```json
-{"messages": [{"role": "system", "content": "<system>"}, {"role": "user", "content": "<query1>"}, {"role": "assistant", "content": "<response1>"}, {"role": "user", "content": "<query2>"}, {"role": "assistant", "content": "<response2>"}]}
+{
+    "messages": [
+        {"role": "system", "content": "<system>"}, 
+        {"role": "user", "content": "<query1>"}, 
+        {"role": "assistant", "content": "<response1>"}, 
+        {"role": "user", "content": "<query2>"}, 
+        {"role": "assistant", "content": "<response2>"}
+    ]
+}
 ```
 
 
 ### Tools / Agent 训练
 #### 训练数据格式
 ```json
-{"tools": "[{\"type\": \"function\", \"function\": {\"name\": \"realtime_aqi\", \"description\": \"天气预报。获取实时空气质量。当前空气质量，PM2.5，PM10信息\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"城市名，例如：上海\"}}, \"required\": [\"city\"]}}}]", "messages": [{"role": "user", "content": "北京和上海今天的天气情况"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"北京\"}}"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"上海\"}}"}, {"role": "tool_response", "content": "{\"city\": \"北京\", \"aqi\": \"10\", \"unit\": \"celsius\"}"}, {"role": "tool_response", "content": "{\"city\": \"上海\", \"aqi\": \"72\", \"unit\": \"fahrenheit\"}"}, {"role": "assistant", "content": "根据天气预报工具，北京今天的空气质量指数为10，属于良好水平；上海今天的空气质量指数为72，属于轻度污染水平。"}]}
+{
+    "tools": "[{\"type\": \"function\", \"function\": {\"name\": \"realtime_aqi\", \"description\": \"天气预报。获取实时空气质量。当前空气质量，PM2.5，PM10信息\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"城市名，例如：上海\"}}, \"required\": [\"city\"]}}}]", 
+    "messages": [
+        {"role": "user", "content": "北京和上海今天的天气情况"}, 
+        {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"北京\"}}"}, 
+        {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"上海\"}}"}, 
+        {"role": "tool_response", "content": "{\"city\": \"北京\", \"aqi\": \"10\", \"unit\": \"celsius\"}"}, 
+        {"role": "tool_response", "content": "{\"city\": \"上海\", \"aqi\": \"72\", \"unit\": \"fahrenheit\"}"}, 
+        {"role": "assistant", "content": "根据天气预报工具，北京今天的空气质量指数为10，属于良好水平；上海今天的空气质量指数为72，属于轻度污染水平。"}
+    ]
+}
 ```
 
 **注意**：
@@ -369,7 +400,17 @@ template = get_template(
     tokenizer, 
     # agent_template='hermes'
 )
-data = {"tools": "[{\"type\": \"function\", \"function\": {\"name\": \"realtime_aqi\", \"description\": \"天气预报。获取实时空气质量。当前空气质量，PM2.5，PM10信息\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"城市名，例如：上海\"}}, \"required\": [\"city\"]}}}]", "messages": [{"role": "user", "content": "北京和上海今天的天气情况"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"北京\"}}"}, {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"上海\"}}"}, {"role": "tool_response", "content": "{\"city\": \"北京\", \"aqi\": \"10\", \"unit\": \"celsius\"}"}, {"role": "tool_response", "content": "{\"city\": \"上海\", \"aqi\": \"72\", \"unit\": \"fahrenheit\"}"}, {"role": "assistant", "content": "根据天气预报工具，北京今天的空气质量指数为10，属于良好水平；上海今天的空气质量指数为72，属于轻度污染水平。"}]}
+data = {
+    "tools": "[{\"type\": \"function\", \"function\": {\"name\": \"realtime_aqi\", \"description\": \"天气预报。获取实时空气质量。当前空气质量，PM2.5，PM10信息\", \"parameters\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\", \"description\": \"城市名，例如：上海\"}}, \"required\": [\"city\"]}}}]", 
+    "messages": [
+        {"role": "user", "content": "北京和上海今天的天气情况"}, 
+        {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"北京\"}}"}, 
+        {"role": "tool_call", "content": "{\"name\": \"realtime_aqi\", \"arguments\": {\"city\": \"上海\"}}"}, 
+        {"role": "tool_response", "content": "{\"city\": \"北京\", \"aqi\": \"10\", \"unit\": \"celsius\"}"}, 
+        {"role": "tool_response", "content": "{\"city\": \"上海\", \"aqi\": \"72\", \"unit\": \"fahrenheit\"}"}, 
+        {"role": "assistant", "content": "根据天气预报工具，北京今天的空气质量指数为10，属于良好水平；上海今天的空气质量指数为72，属于轻度污染水平。"}
+    ]
+}
 template.set_mode('train')
 encoded = template.encode(data)
 print(f'[INPUT_IDS] {template.safe_decode(encoded["input_ids"])}\n')
@@ -435,6 +476,22 @@ swift export \
 ## 权重转换 Megatron 转 HF
 
 先把分散在不同机器上的权重移到一起
+
+<a id="lora"></a>
+
+### LoRA
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+MEGATRON_LM_PATH='/mnt/workspace/Megatron-LM' \
+swift export \
+    --model /models/ZhipuAI/GLM-4.5-Air \
+    --mcore_model /models/ZhipuAI/GLM-4.5-Air-mcore \
+    --mcore_adapters /models/megatron_output/GLM-4.5-Air-FH/vxxx \
+    --to_hf true \
+    --torch_dtype bfloat16 \
+    --output_dir /models/megatron_output/GLM-4.5-Air-HF/v59
+```
+
 
 ### Full
 ```bash
@@ -636,4 +693,4 @@ curl http://localhost:6060/v1/chat/completions -H "Content-Type: application/jso
     4. `get_function`
     5. `architectures`
     6. `requires`: transformers 版本要求
-5. 
+
