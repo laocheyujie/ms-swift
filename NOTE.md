@@ -12,19 +12,28 @@
 
 
 # 安装
-## Docker 安装
-### 启动容器
-> [环境准备](https://swift.readthedocs.io/zh-cn/latest/Instruction/Megatron-SWIFT%E8%AE%AD%E7%BB%83.html#id1)
 
-离线的话可以提前下好 Megatron-LM
+## 1. 下载 Megatron-LM
 ```bash
 git clone git@github.com:NVIDIA/Megatron-LM.git Megatron-LM --branch core_r0.14.0
 ```
+> 去 `swift/swift/megatron/init.py` 的 `init_megatron_env` 里查看当前具体使用的 mcore 版本
 
+## 2. 下载 ms-swift
+```bash
+git clone git@github.com:laocheyujie/ms-swift.git
+```
+
+## 3. 下载镜像
 ```bash
 docker pull modelscope-registry.cn-hangzhou.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.8.1-py311-torch2.8.0-vllm0.11.0-modelscope1.31.0-swift3.9.3
+```
+
+## 4. 启动容器
+> [环境准备](https://swift.readthedocs.io/zh-cn/latest/Instruction/Megatron-SWIFT%E8%AE%AD%E7%BB%83.html#id1)
 
 
+```bash
 docker run -itd \
     --gpus all \
     --shm-size=128g \
@@ -38,54 +47,12 @@ docker run -itd \
     --name ms \
     modelscope-registry.cn-hangzhou.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.8.1-py311-torch2.8.0-vllm0.11.0-modelscope1.31.0-swift3.9.3
 
-# 容器里安装 zsh
-
-docker exec -it ms /bin/zsh
+docker exec -it ms /bin/bash
 ```
 
+## 5. 容器内
 
-### 添加代理
-`vi ~/.bashrc`
-```bash
-BASE_PROXY_URL="http://xxx.xxx.xxx.xxx:7890"
-
-function proxyon() {
-    export http_proxy="$BASE_PROXY_URL"
-    export https_proxy="$BASE_PROXY_URL"
-    echo "proxy started!"
-}
-
-function unproxy() {
-    unset http_proxy
-    unset https_proxy
-    echo "proxy stoped!"
-}
-
-function proxytest() {
-    echo "Testing proxy..."
-    curl -I --proxy "$BASE_PROXY_URL" https://www.google.com 2>/dev/null | head -n 1
-    if [ $? -eq 0 ]; then
-        echo "Proxy test successful!"
-    else
-        echo "Proxy test failed!"
-    fi
-}
-```
-
-### Python 依赖
-```bash
-pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-pip config set global.extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple
-pip install --upgrade pip
-
-cd /mnt/workspace/ms-swift
-git config --global --add safe.directory /mnt/workspace/ms-swift
-pip install -e .
-pip install swanlab ipykernel -U
-```
-
-
-### Multi-node
+### 基础依赖 (Multi-node)
 ```bash
 apt update -y && apt install -y pdsh
 apt install -y openssh-server
@@ -126,15 +93,81 @@ EOF
 
 ssh-copy-id node-1
 ssh-copy-id node-2
+```
 
+### zsh
+```bash
+apt install -y zsh
+wget https://gitee.com/mirrors/oh-my-zsh/raw/master/tools/install.sh
+chmod +x install.sh
+./install.sh
+
+# 补全提示
+git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions
+# git clone git@github.com:zsh-users/zsh-autosuggestions.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions
+# 高亮
+git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+# git clone git@github.com:zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+
+vi +73 ~/.zshrc
+plugins=(git zsh-autosuggestions zsh-syntax-highlighting pip)
+
+source ~/.zshrc
+```
+
+### Python 依赖
+```bash
+pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+pip config set global.extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple
+pip install --upgrade pip
+
+cd /mnt/workspace/ms-swift
+git config --global --add safe.directory /mnt/workspace/ms-swift
+pip install -e .
+pip install swanlab ipykernel -U
+```
+
+
+### ~~hostfile~~
+```bash
 cd /mnt/workspace
 
 tee hostfile <<-'EOF'
 node-1 slots=8
 node-2 slots=8
 EOF
-
 ```
+
+
+### ~~添加代理~~
+`vi ~/.bashrc`
+```bash
+BASE_PROXY_URL="http://xxx.xxx.xxx.xxx:7890"
+
+function proxyon() {
+    export http_proxy="$BASE_PROXY_URL"
+    export https_proxy="$BASE_PROXY_URL"
+    echo "proxy started!"
+}
+
+function unproxy() {
+    unset http_proxy
+    unset https_proxy
+    echo "proxy stoped!"
+}
+
+function proxytest() {
+    echo "Testing proxy..."
+    curl -I --proxy "$BASE_PROXY_URL" https://www.google.com 2>/dev/null | head -n 1
+    if [ $? -eq 0 ]; then
+        echo "Proxy test successful!"
+    else
+        echo "Proxy test failed!"
+    fi
+}
+```
+
+
 
 ### 检查网络
 ```bash
