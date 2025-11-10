@@ -18,16 +18,29 @@
 
 离线的话可以提前下好 Megatron-LM
 ```bash
-git clone git@github.com:NVIDIA/Megatron-LM.git Megatron-LM --branch core_r0.13.0
+git clone git@github.com:NVIDIA/Megatron-LM.git Megatron-LM --branch core_r0.14.0
 ```
 
 ```bash
-docker pull modelscope-registry.cn-hangzhou.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.6.3-py311-torch2.7.1-vllm0.10.0-modelscope1.28.2-swift3.7.1
+docker pull modelscope-registry.cn-hangzhou.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.8.1-py311-torch2.8.0-vllm0.11.0-modelscope1.31.0-swift3.9.3
 
 
-docker run --gpus all --shm-size=128g --net=host -itd -w /mnt/workspace -v /data/cheyujie/datasets:/datasets -v /data/cheyujie/models:/models -v /data/cheyujie/code/ms-swift:/mnt/workspace/ms-swift -v /data/cheyujie/code/Megatron-LM:/mnt/workspace/Megatron-LM --name ms modelscope-registry.cn-hangzhou.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.6.3-py311-torch2.7.1-vllm0.10.0-modelscope1.28.2-swift3.7.1 /bin/bash
+docker run -itd \
+    --gpus all \
+    --shm-size=128g \
+    --net=host \
+    -w /mnt/workspace \
+    -v /data/cheyujie/code/ms-swift:/mnt/workspace/ms-swift \
+    -v /data/cheyujie/code/Megatron-LM:/mnt/workspace/Megatron-LM \
+    -v /data/cheyujie/datasets:/datasets \
+    -v /data/cheyujie/models:/models \
+    -v /data2/cheyujie/models:/output \
+    --name ms \
+    modelscope-registry.cn-hangzhou.cr.aliyuncs.com/modelscope-repo/modelscope:ubuntu22.04-cuda12.8.1-py311-torch2.8.0-vllm0.11.0-modelscope1.31.0-swift3.9.3
 
-docker exec -it ms /bin/bash
+# 容器里安装 zsh
+
+docker exec -it ms /bin/zsh
 ```
 
 
