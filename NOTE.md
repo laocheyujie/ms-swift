@@ -124,7 +124,11 @@ pip install --upgrade pip
 cd /mnt/workspace/ms-swift
 git config --global --add safe.directory /mnt/workspace/ms-swift
 pip install -e .
-pip install swanlab ipykernel -U
+pip install swanlab nvitop ipykernel -U
+
+vi + ~/.zshrc
+export SWANLAB_API_KEY=xxxx
+source ~/.zshrc
 ```
 
 
@@ -290,6 +294,14 @@ export MEGATRON_LM_PATH='/xxx/Megatron-LM'
 > 默认位置：local_repo_path: /mnt/workspace/.cache/modelscope/hub/_github/Megatron-LM
 
 
+# Swift
+
+## 训练
+
+参考 `ms-swift/examples/train/cheyujie/swift_dense_lora.sh`
+
+
+
 
 # Megatron
 ## 权重转换 HF 转 Megatron
@@ -311,6 +323,10 @@ swift export \
 
 
 ## 训练
+
+参考 `ms-swift/examples/train/cheyujie/megatron_multinode_moe_lora.sh`
+
+
 ### 训练流程
 
 [Best Practices for SFT Training](https://github.com/modelscope/ms-swift/pull/5033)
