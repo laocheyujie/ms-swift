@@ -109,8 +109,7 @@ git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-m
 git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
 # git clone git@github.com:zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
 
-vi +73 ~/.zshrc
-plugins=(git zsh-autosuggestions zsh-syntax-highlighting pip)
+sed -i "s/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting pip)/" ~/.zshrc
 
 source ~/.zshrc
 ```
@@ -125,6 +124,9 @@ cd /mnt/workspace/ms-swift
 git config --global --add safe.directory /mnt/workspace/ms-swift
 pip install -e .
 pip install swanlab nvitop ipykernel -U
+
+# swanlab 需要 antlr4-python3-runtime==4.9.3, 4.13.x 不行
+pip install antlr4-python3-runtime==4.9.3
 
 vi + ~/.zshrc
 export SWANLAB_API_KEY=xxxx
