@@ -25,6 +25,18 @@ megatron export \
     --pipeline_model_parallel_size 2 \
     --test_convert_precision true
 
+# torch_dist -> safetensors (老版本全参训练后的权重转换)
+```bash
+CUDA_VISIBLE_DEVICES=0 \
+swift export \
+    --mcore_model /models/megatron_output/GLM-4.5-Air-SFT/vx-xxx \
+    --to_hf true \
+    --torch_dtype bfloat16 \
+    --output_dir /models/megatron_output/GLM-4.5-Air-HF/vx-xxx-hf \
+    --test_convert_precision true
+```
+> - test_convert_precisio: 测试HF和Megatron格式权重转换的精度误差，若出现内存不足，请将`--test_convert_precision true`删除
+
 
 # LoRA 权重转换
 # torch_dist -> safetensors

@@ -1,56 +1,4 @@
-## Megatron
-swift.cli._megatron.sft.py -> 
-megatron_sft_main() ->
-MegatronSft(args).main() ->
-result = self.run() ->
-args = self.args
-train_dataset, val_dataset = self._prepare_dataset()
-data_collator = self._get_data_collator()
-self.trainer.train(train_dataset, val_dataset, data_collator) ->
-datasets_provider = get_swift_datasets_provider(train_dataset, val_dataset)
-pretrain(datasets_provider, model_provider, model_type, forward_step_func, ..., extra_args_provider, args_defaults) ->
-initialize_megatron
-set_jit_fusion_options()
-model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider_func, model_type, checkpointing_context={}) ->
-model, optimizer, opt_param_scheduler = self._origin_setup_model_and_optimizer(new_model_provider_func, model_type, *_args, **kwargs) ->
-model = get_model(model_provider_func, model_type) ->
-model = build_model() ->
-model = model_provider_func(pre_process=pre_process, post_process=post_process) ->
-实际进入了 swift.megatron.trainers.base.py new_model_provider_func ->
-self.unwrapped_model = model_provider_func(*args, **kwargs) ->
-transformer_layer_spec = get_gpt_decoder_block_spec(config, use_transformer_engine=use_te, normalization=args.normalization)
-dense_layer_spec = get_gpt_layer_with_transformer_engine_spec(...) ->
-
-
-model_provider_func -> 
-get_gpt_decoder_block_spec -> 
-get_gpt_layer_with_transformer_engine_spec 得到 dense_layer_spec 和 moe_layer_spec，遍历 num_layers，根据 moe_layer_pattern 来堆叠 layer_specs 列表里每个 layer，获取当前 pp 的 local_layer_specs，组装成 block_spec = TransformerBlockSubmodules(layer_specs=local_layer_specs, layer_norm=layer_norm_impl) -> 
-selfattention 模块是通用的，mlp 要区分是 dense 还是 moe，mlp = get_mlp_module_spec_for_backend(...) 得到 mlp 层，组装 ModuleSpec(...) ->
-Dense: linear_fc1: TELayerNormColumnParallelLinear; linear_fc2: TERowParallelLinear，组装成 mlp = ModuleSpec(module=MLP, submodules=MLPSubmodules(linear_fc1=linear_fc1, linear_fc2=linear_fc2))
-MoE(get_moe_module_spec_for_backend): 
-    - 共享专家：linear_fc1: TEColumnParallelLinear; linear_fc2: TERowParallelLinear，组装成共享专家的子层 mlp = MLPSubmodules(linear_fc1=linear_fc1, linear_fc2=linear_fc2)，shared_experts = ModuleSpec(module=SharedExpertMLP, params={"gate": False}, submodules=mlp)
-    - 普通专家：linear_fc1: TEColumnParallelGroupedLinear; linear_fc2: TERowParallelGroupedLinear，组成普通专家的子层 expert_submodule = MLPSubmodules(linear_fc1=TEColumnParallelGroupedLinear, linear_fc2=TERowParallelGroupedLinear)，experts = ModuleSpec(module=TEGroupedMLP, submodules=expert_submodule)
-组成 MoE: moe_module_spec = ModuleSpec(module=MoELayer, submodules=MoESubmodules(experts=experts, shared_experts=shared_experts))
-
-    
-
-
-
-TELayerNormColumnParallelLinear(te.pytorch.LayerNormLinear), 在 __init__ 方法里调用了父类的 __init__, 父类里有:
-```py
-if self.parallel_mode == "column":
-    self.out_features = divide(self.out_features, self.tp_size)
-elif self.parallel_mode == "row":
-    self.in_features = divide(self.in_features, self.tp_size)
-```
-
-
-args.finetune or release: iteration = 0，否则会从 state_dict 里读取 iteration
-
-
-step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_size 决定多少个数据进行一次参数更新
-
-
+# Megatron
 
 ## 简版流程
 1. 初始化 megatron 运行环境 `init_megatron_env` 
@@ -145,12 +93,7 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                 2. train: `train_step(forward_step_func, train_data_iterator, model, optimizer, opt_param_scheduler, config)`
 
 
-
-
-
-
-
-## 流程
+## 详细流程
 
 1. `swift.cli._megatron.sft.py` -> `from swift.megatron import megatron_sft_main` -> `swift.megatron.__init__.py` 会进行导包初始化
     1. `init_megatron_env` 根据 `MEGATRON_LM_PATH` 来安装或者下载 megatron；`_patch_megatron` 对 Megatron 打一些补丁
@@ -573,6 +516,83 @@ step_batch_size = args.micro_batch_size * data_parallel_size 即 micro_batch_siz
                             8. `return loss`
 
 
+## 代码流程
+swift.cli._megatron.sft.py -> 
+
+megatron_sft_main() ->
+
+MegatronSft(args).main() ->
+
+result = self.run() ->
+
+args = self.args
+
+train_dataset, val_dataset = self._prepare_dataset()
+
+data_collator = self._get_data_collator()
+
+self.trainer.train(train_dataset, val_dataset, data_collator) ->
+
+datasets_provider = get_swift_datasets_provider(train_dataset, val_dataset)
+
+pretrain(datasets_provider, model_provider, model_type, forward_step_func, ..., extra_args_provider, args_defaults) ->
+
+initialize_megatron
+
+set_jit_fusion_options()
+
+model, optimizer, opt_param_scheduler = setup_model_and_optimizer(model_provider_func, model_type, checkpointing_context={}) ->
+
+model, optimizer, opt_param_scheduler = self._origin_setup_model_and_optimizer(new_model_provider_func, model_type, *_args, **kwargs) ->
+
+model = get_model(model_provider_func, model_type) ->
+
+model = build_model() ->
+
+model = model_provider_func(pre_process=pre_process, post_process=post_process) ->
+
+实际进入了 swift.megatron.trainers.base.py new_model_provider_func ->
+
+self.unwrapped_model = model_provider_func(*args, **kwargs) ->
+
+transformer_layer_spec = get_gpt_decoder_block_spec(config, use_transformer_engine=use_te, normalization=args.normalization)
+
+dense_layer_spec = get_gpt_layer_with_transformer_engine_spec(...) ->
+
+
+model_provider_func -> 
+
+get_gpt_decoder_block_spec -> 
+
+get_gpt_layer_with_transformer_engine_spec 得到 dense_layer_spec 和 moe_layer_spec，遍历 num_layers，根据 moe_layer_pattern 来堆叠 layer_specs 列表里每个 layer，获取当前 pp 的 local_layer_specs，组装成 block_spec = TransformerBlockSubmodules(layer_specs=local_layer_specs, layer_norm=layer_norm_impl) -> 
+
+selfattention 模块是通用的，mlp 要区分是 dense 还是 moe，mlp = get_mlp_module_spec_for_backend(...) 得到 mlp 层，组装 ModuleSpec(...) ->
+
+Dense: linear_fc1: TELayerNormColumnParallelLinear; linear_fc2: TERowParallelLinear，组装成 mlp = ModuleSpec(module=MLP, submodules=MLPSubmodules(linear_fc1=linear_fc1, linear_fc2=linear_fc2))
+
+MoE(get_moe_module_spec_for_backend): 
+
+- 共享专家：linear_fc1: TEColumnParallelLinear; linear_fc2: TERowParallelLinear，组装成共享专家的子层 mlp = MLPSubmodules(linear_fc1=linear_fc1, linear_fc2=linear_fc2)，shared_experts = ModuleSpec(module=SharedExpertMLP, params={"gate": False}, submodules=mlp)
+
+- 普通专家：linear_fc1: TEColumnParallelGroupedLinear; linear_fc2: TERowParallelGroupedLinear，组成普通专家的子层 expert_submodule = MLPSubmodules(linear_fc1=TEColumnParallelGroupedLinear, linear_fc2=TERowParallelGroupedLinear)，experts = ModuleSpec(module=TEGroupedMLP, submodules=expert_submodule)
+
+组成 MoE: moe_module_spec = ModuleSpec(module=MoELayer, submodules=MoESubmodules(experts=experts, shared_experts=shared_experts))
+
+
+`TELayerNormColumnParallelLinear(te.pytorch.LayerNormLinear)`, 在 `__init__` 方法里调用了父类的 `__init__`, 父类里有:
+
+```py
+if self.parallel_mode == "column":
+    self.out_features = divide(self.out_features, self.tp_size)
+elif self.parallel_mode == "row":
+    self.in_features = divide(self.in_features, self.tp_size)
+```
+
+
+`args.finetune` or release: iteration = 0，否则会从 `state_dict` 里读取 iteration
+
+
+`step_batch_size = args.micro_batch_size * data_parallel_size` 即 `micro_batch_size` 决定多少个数据进行一次参数更新
 
 
 
